@@ -276,7 +276,12 @@ extension Tab: WKNavigationDelegate {
                 return
             }
         }
-        decisionHandler(.allow)
+        // Ordinary web navigation: load it here. NavigationPolicy keeps WebKit
+        // from offering the URL to an installed app first, which is what made
+        // clicks on links like xbox.com leave the browser and fail with 102.
+        // Downloads and redirects are unaffected: they are decided by the
+        // response policy that runs after this one allows the action.
+        decisionHandler(NavigationPolicy.decision(for: url))
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
@@ -303,6 +308,11 @@ extension Tab: WKNavigationDelegate {
         let ns = error as NSError
         // -999 is "cancelled", which happens on every normal redirect/stop.
         guard ns.code != NSURLErrorCancelled else { return }
+        // 102 is "frame load interrupted by policy change". The system took the
+        // navigation over (an app link) or we deliberately cancelled it for a new
+        // tab, so there is no page to report — stay silent instead of painting an
+        // error over the page the user is on.
+        guard !NavigationPolicy.isFrameLoadInterrupted(ns) else { return }
         let failing = (ns.userInfo[NSURLErrorFailingURLStringErrorKey] as? String) ?? url?.absoluteString ?? ""
         let host = URL(string: failing)?.host ?? failing
         let html = """
