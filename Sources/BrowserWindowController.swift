@@ -29,6 +29,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private let urlBar = URLBar()
     private var urlField: URLField { urlBar.field }
     private let statusPill = StatusPill()
+    private let downloadIndicator = DownloadIndicator()
     private let plusButton = NSButton()
 
     private let findRow = BarBackgroundView()
@@ -90,9 +91,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         installMemoryPressureHandling()
 
         Downloads.shared.statusHandler = { [weak self] msg in self?.showStatus(msg) }
+
+        // No polling: the indicator follows WebKit's download callbacks and KVO.
+        NotificationCenter.default.addObserver(self, selector: #selector(downloadsDidChange),
+                                               name: .downloadsDidChange, object: Downloads.shared)
+        updateDownloadIndicator()
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
 
     // MARK: - Chrome
 
@@ -114,6 +122,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         tabStrip.delegate = self
         progressBar.active = false
         findRow.isHidden = true
+        downloadIndicator.isHidden = true    // shown by updateDownloadIndicator()
 
         backButton = ToolbarButton(symbol: "chevron.backward", tip: "Back (\u{2318}[)",
                                    target: self, action: #selector(goBack))
@@ -148,7 +157,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
 
         [backButton, forwardButton, urlBar, reloadButton, bookmarkButton,
-         shieldButton, statusPill, plusButton].forEach { toolbarRow.addSubview($0!) }
+         shieldButton, statusPill, downloadIndicator, plusButton].forEach { toolbarRow.addSubview($0!) }
 
         // Find bar
         findField.placeholderString = "Find on page"
@@ -226,13 +235,20 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         var right = b.width - 12
         plusButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
         right -= bw + 2
-        if Config.shared.showMemoryReadout {
+        if Settings.shared.showMemoryPill(jsonValue: Config.shared.showMemoryReadout) {
             statusPill.isHidden = false
             let w = max(64, min(190, statusPill.fittingWidth))
             statusPill.frame = NSRect(x: right - w, y: 0, width: w, height: toolRow)
             right -= w + 4
         } else {
             statusPill.isHidden = true
+        }
+
+        // Takes toolbar space only while something is downloading.
+        if !downloadIndicator.isHidden {
+            downloadIndicator.frame = NSRect(x: right - 22, y: (toolRow - 22) / 2,
+                                             width: 22, height: 22)
+            right -= 22 + 2
         }
         shieldButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
         right -= bw + 2
@@ -269,6 +285,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         saveSessionNow()
+        NotificationCenter.default.removeObserver(self)
         hibernationTimer?.invalidate()
         memoryTimer?.invalidate()
         memoryPressureSource?.cancel()
@@ -384,6 +401,24 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Chrome refresh
 
     @objc private func newTabFromToolbar() { newTab() }
+
+    /// Re-applies the settings owned by the Settings window. Called for every open window.
+    func applySettings() {
+        startMemoryReadout()
+        layoutChrome()
+    }
+
+    @objc private func downloadsDidChange() { updateDownloadIndicator() }
+
+    private func updateDownloadIndicator() {
+        let d = Downloads.shared
+        downloadIndicator.isHidden = !d.isDownloading
+        downloadIndicator.progress = d.overallProgress
+        downloadIndicator.toolTip = d.isDownloading
+            ? "\(d.activeCount) download\(d.activeCount == 1 ? "" : "s") \u{2014} \(Int(d.overallProgress * 100))%"
+            : nil
+        layoutChrome()
+    }
 
     func refreshChrome() {
         layoutChrome()
@@ -572,7 +607,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Memory readout
 
     private func startMemoryReadout() {
-        guard Config.shared.showMemoryReadout else { return }
+        // The Settings toggle calls this again, so never leave a second timer behind.
+        memoryTimer?.invalidate()
+        memoryTimer = nil
+        guard Settings.shared.showMemoryPill(jsonValue: Config.shared.showMemoryReadout) else {
+            statusPill.text = ""
+            return
+        }
         updateMemoryReadout()
         memoryTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
             guard let self, let w = self.window,

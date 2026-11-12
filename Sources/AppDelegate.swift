@@ -5,6 +5,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static var shared: AppDelegate?
 
     private var controllers: [BrowserWindowController] = []
+    /// The single Settings window, built on first ⌘, and reused after that.
+    private var settingsController: SettingsWindowController?
     /// URLs can arrive from LaunchServices before the first window exists (clicking a
     /// link while Lantern is closed), so hold them until the window is up.
     private var isReady = false
@@ -135,8 +137,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func openSettings() {
-        Config.shared.save()
-        NSWorkspace.shared.open(Config.supportDir.appendingPathComponent("config.json"))
+        if settingsController == nil { settingsController = SettingsWindowController() }
+        settingsController?.present()
+    }
+
+    /// The Settings window calls this so every open window applies the change at once.
+    func settingsDidChange() {
+        controllers.forEach { $0.applySettings() }
     }
 
     @objc func openBlocklist() {
