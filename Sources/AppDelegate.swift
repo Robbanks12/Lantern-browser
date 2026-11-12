@@ -85,7 +85,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { makeWindow().newTab() }
+        if controllers.isEmpty {
+            // Closed to the Dock: build a fresh window instead of reopening onto nothing.
+            makeWindow().newTab()
+        } else if !flag {
+            // Windows exist but none are on screen (miniaturised, hidden): bring one back
+            // rather than stacking a second window on top of them.
+            front?.window?.makeKeyAndOrderFront(nil)
+        }
         return true
     }
 
