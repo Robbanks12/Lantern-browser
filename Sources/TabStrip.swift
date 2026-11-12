@@ -178,12 +178,16 @@ final class TabItemView: NSView {
             arc.stroke()
         } else if let icon = favicon {
             let rect = NSRect(x: x, y: iconY, width: iconSize, height: iconSize)
+            // This view is flipped, and without respectFlipped the image maps with
+            // its origin at the wrong corner and renders upside down.
             if isHibernated {
                 NSGraphicsContext.current?.saveGraphicsState()
-                icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.45)
+                icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.45,
+                          respectFlipped: true, hints: nil)
                 NSGraphicsContext.current?.restoreGraphicsState()
             } else {
-                icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+                icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0,
+                          respectFlipped: true, hints: nil)
             }
         } else {
             // Letter tile fallback so tabs never look empty.
@@ -289,9 +293,10 @@ final class TabStripView: NSView {
         layoutTabs()
     }
 
-    /// Safari's bargain: the selected tab keeps a comfortable width so its title
-    /// and close button stay visible, while the rest share what is left. When the
-    /// window is wide every tab expands evenly, capped as before.
+    /// Safari's bargain, active-first: the selected tab is always allocated its
+    /// full maximum while every inactive tab shares the remainder. Inactive tabs
+    /// shrink to their floor before the active tab gives up a single point, and
+    /// below that everything scales in proportion so the row still fills the strip.
     private let maxTabWidth: CGFloat = 210
     private let minActiveTabWidth: CGFloat = 140
     private let minInactiveTabWidth: CGFloat = 48
@@ -303,21 +308,27 @@ final class TabStripView: NSView {
         guard n > 0 else { return [] }
         let available = max(0, bounds.width - 6)
         if n == 1 { return [min(maxTabWidth, available)] }
-        if available >= maxTabWidth * CGFloat(n) { return Array(repeating: maxTabWidth, count: n) }
-        let even = available / CGFloat(n)
-        if even >= minActiveTabWidth { return Array(repeating: even, count: n) }
-        // Crowded: pin the selected tab and split the remainder.
         let selected = items.firstIndex(where: { $0.isSelected }) ?? 0
-        var active = minActiveTabWidth
-        var inactive = (available - active) / CGFloat(n - 1)
-        if inactive < minInactiveTabWidth {
-            // Not even the minimums fit: shrink in proportion so the row still
-            // exactly fills the strip instead of overflowing it.
-            let scale = available / (minActiveTabWidth + CGFloat(n - 1) * minInactiveTabWidth)
-            active = minActiveTabWidth * scale
-            inactive = minInactiveTabWidth * scale
+        // 1. Plenty of room: the active tab takes its maximum, the rest split
+        //    the remainder evenly (which here is still >= the maximum each).
+        if available >= maxTabWidth * CGFloat(n) { return Array(repeating: maxTabWidth, count: n) }
+        // 2. Normal crowding: active pinned at the maximum, inactive share the rest.
+        if available >= maxTabWidth + CGFloat(n - 1) * minInactiveTabWidth {
+            let inactive = (available - maxTabWidth) / CGFloat(n - 1)
+            return items.indices.map { $0 == selected ? maxTabWidth : inactive }
         }
-        return items.indices.map { $0 == selected ? active : inactive }
+        // 3. Inactive tabs are at their floor; the active tab now absorbs the
+        //    overflow instead, and can shrink as far as its own minimum.
+        if available >= minActiveTabWidth + CGFloat(n - 1) * minInactiveTabWidth {
+            let active = available - CGFloat(n - 1) * minInactiveTabWidth
+            return items.indices.map { $0 == selected ? active : minInactiveTabWidth }
+        }
+        // 4. Not even the minimums fit: shrink in proportion so the row still
+        //    exactly fills the strip instead of overflowing it.
+        let scale = available / (minActiveTabWidth + CGFloat(n - 1) * minInactiveTabWidth)
+        return items.indices.map {
+            $0 == selected ? minActiveTabWidth * scale : minInactiveTabWidth * scale
+        }
     }
 
     private func layoutTabs() {
