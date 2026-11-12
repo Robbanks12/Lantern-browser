@@ -109,6 +109,34 @@ final class StatusPill: NSView {
     }
 }
 
+/// Determinate download ring for the toolbar. Hidden unless something is downloading,
+/// so it costs nothing at rest. No timer: progress arrives from WKDownload's KVO.
+final class DownloadIndicator: NSView {
+    var progress: Double = 0 { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let r = bounds.insetBy(dx: 3, dy: 3)
+        let center = NSPoint(x: r.midX, y: r.midY)
+        let radius = min(r.width, r.height) / 2
+
+        let track = NSBezierPath()
+        track.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
+        NSColor.quaternaryLabelColor.withAlphaComponent(0.5).setStroke()
+        track.lineWidth = 2
+        track.stroke()
+
+        let arc = NSBezierPath()
+        arc.appendArc(withCenter: center, radius: radius, startAngle: 90,
+                      endAngle: 90 - CGFloat(360 * max(0.02, min(1, progress))),
+                      clockwise: true)
+        NSColor.controlAccentColor.setStroke()
+        arc.lineWidth = 2
+        arc.stroke()
+    }
+}
+
 /// One-pixel hairline. A view rather than a drawn line so it can sit in the layout.
 final class HairlineView: NSView {
     override func draw(_ dirtyRect: NSRect) {
