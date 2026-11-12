@@ -35,6 +35,11 @@ final class TabItemView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// A press on a tab belongs to the tab, never to the window. The window is
+    /// `isMovableByWindowBackground`, and AppKit would otherwise start dragging the
+    /// window instead of delivering mouseDragged, so the tab could not reorder.
+    override var mouseDownCanMoveWindow: Bool { false }
+
     private var showsTitle: Bool { bounds.width >= 76 }
     /// Safari keeps the close button's slot even while the button is hidden, so the
     /// icon and title do not shift sideways when the tab is hovered.
@@ -250,6 +255,9 @@ final class TabStripView: NSView {
     /// typing in a page title does not churn the view hierarchy.
     func update(tabs: [Tab], selected: Int) {
         if items.count != tabs.count {
+            // The views below are replaced, so a drag in flight has no view left to
+            // track and must not keep an index into the old array.
+            if dragIndex != nil { endDrag() }
             items.forEach { $0.removeFromSuperview() }
             items = tabs.indices.map { i in
                 let v = TabItemView()
@@ -317,6 +325,7 @@ final class TabStripView: NSView {
 
     private func updateDrag(_ pointerInWindow: NSPoint) {
         guard let from = dragIndex else { return }
+        guard items.indices.contains(from) else { endDrag(); return }
         dragPointerX = convert(pointerInWindow, from: nil).x
         let available = max(0, bounds.width - 6)
         let w = tabWidth(available: available)
@@ -325,9 +334,13 @@ final class TabStripView: NSView {
         let leadingEdge = dragPointerX - dragGrabX
         let to = max(0, min(items.count - 1, Int(((leadingEdge + w / 2) / w).rounded(.down))))
         if to != from {
+            // Move the view exactly as the model moves, so items[i] keeps describing
+            // tab i and the view under the pointer stays the one being dragged. The
+            // delegate's update() then rebinds content by index and agrees with us.
+            let moved = items.remove(at: from)
+            items.insert(moved, at: to)
             dragIndex = to
-            // The delegate reorders and calls update(), which re-lays out around the
-            // dragged tab; grabX is preserved so the tab stays under the pointer.
+            // grabX is preserved so the tab stays under the pointer.
             delegate?.tabStripDidRequestMove(from: from, to: to)
         }
         layoutTabs()
