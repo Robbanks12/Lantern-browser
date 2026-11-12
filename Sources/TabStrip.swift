@@ -289,27 +289,50 @@ final class TabStripView: NSView {
         layoutTabs()
     }
 
-    /// Width per tab. Tabs shrink as far as they must so that every tab stays on
-    /// screen and clickable -- a lower bound here would push the last tabs past the
-    /// window edge where they cannot be reached at all.
-    private func tabWidth(available: CGFloat) -> CGFloat {
-        guard !items.isEmpty else { return 0 }
-        return min(210, available / CGFloat(items.count))
+    /// Safari's bargain: the selected tab keeps a comfortable width so its title
+    /// and close button stay visible, while the rest share what is left. When the
+    /// window is wide every tab expands evenly, capped as before.
+    private let maxTabWidth: CGFloat = 210
+    private let minActiveTabWidth: CGFloat = 140
+    private let minInactiveTabWidth: CGFloat = 48
+
+    /// One width per item, in `items` order. The selected tab is found by its flag
+    /// rather than by an index, because a drag swaps this array around.
+    private func tabWidths() -> [CGFloat] {
+        let n = items.count
+        guard n > 0 else { return [] }
+        let available = max(0, bounds.width - 6)
+        if n == 1 { return [min(maxTabWidth, available)] }
+        if available >= maxTabWidth * CGFloat(n) { return Array(repeating: maxTabWidth, count: n) }
+        let even = available / CGFloat(n)
+        if even >= minActiveTabWidth { return Array(repeating: even, count: n) }
+        // Crowded: pin the selected tab and split the remainder.
+        let selected = items.firstIndex(where: { $0.isSelected }) ?? 0
+        var active = minActiveTabWidth
+        var inactive = (available - active) / CGFloat(n - 1)
+        if inactive < minInactiveTabWidth {
+            // Not even the minimums fit: shrink in proportion so the row still
+            // exactly fills the strip instead of overflowing it.
+            let scale = available / (minActiveTabWidth + CGFloat(n - 1) * minInactiveTabWidth)
+            active = minActiveTabWidth * scale
+            inactive = minInactiveTabWidth * scale
+        }
+        return items.indices.map { $0 == selected ? active : inactive }
     }
 
     private func layoutTabs() {
-        let available = max(0, bounds.width - 6)
         guard !items.isEmpty else { return }
-        let w = tabWidth(available: available)
+        let widths = tabWidths()
         var x: CGFloat = 0
         for (i, v) in items.enumerated() {
-            if i == dragIndex { x += w; continue }   // positioned below, on top of the rest
-            v.frame = NSRect(x: x, y: 0, width: w, height: bounds.height)
-            x += w
+            if i == dragIndex { x += widths[i]; continue }   // positioned below, on top of the rest
+            v.frame = NSRect(x: x, y: 0, width: widths[i], height: bounds.height)
+            x += widths[i]
         }
         if let d = dragIndex, items.indices.contains(d) {
-            let clamped = max(0, min(available - w, dragPointerX - dragGrabX))
-            items[d].frame = NSRect(x: clamped, y: 0, width: w, height: bounds.height)
+            let rowWidth = widths.reduce(0, +)
+            let clamped = max(0, min(rowWidth - widths[d], dragPointerX - dragGrabX))
+            items[d].frame = NSRect(x: clamped, y: 0, width: widths[d], height: bounds.height)
         }
     }
 
@@ -327,12 +350,13 @@ final class TabStripView: NSView {
         guard let from = dragIndex else { return }
         guard items.indices.contains(from) else { endDrag(); return }
         dragPointerX = convert(pointerInWindow, from: nil).x
-        let available = max(0, bounds.width - 6)
-        let w = tabWidth(available: available)
-        guard w > 0 else { return }
+        let widths = tabWidths()
+        guard !widths.isEmpty else { return }
 
+        // The dragged tab's centre decides its slot. Slots are the row's current
+        // cumulative widths, so the index stays right when tabs differ in size.
         let leadingEdge = dragPointerX - dragGrabX
-        let to = max(0, min(items.count - 1, Int(((leadingEdge + w / 2) / w).rounded(.down))))
+        let to = dropIndex(center: leadingEdge + widths[from] / 2, widths: widths)
         if to != from {
             // Move the view exactly as the model moves, so items[i] keeps describing
             // tab i and the view under the pointer stays the one being dragged. The
@@ -344,6 +368,17 @@ final class TabStripView: NSView {
             delegate?.tabStripDidRequestMove(from: from, to: to)
         }
         layoutTabs()
+    }
+
+    /// The slot whose span contains `center`, found by walking the row's cumulative
+    /// widths. Identical to centre-rounding when every tab is the same width.
+    private func dropIndex(center: CGFloat, widths: [CGFloat]) -> Int {
+        var edge: CGFloat = 0
+        for i in widths.indices {
+            edge += widths[i]
+            if center < edge { return i }
+        }
+        return max(0, widths.count - 1)
     }
 
     private func endDrag() {
