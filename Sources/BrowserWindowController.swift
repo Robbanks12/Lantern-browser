@@ -50,6 +50,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private let chromeTopHeight: CGFloat = 36 + 38
     private var findRowHeight: CGFloat { findVisible ? 34 : 0 }
+    /// Set once buildChrome() has created every control. layoutChrome() is a no-op before
+    /// that, because the window can post a resize while it is still being constructed.
+    private var isChromeReady = false
 
     var activeTab: Tab? { tabs.indices.contains(activeIndex) ? tabs[activeIndex] : nil }
 
@@ -62,7 +65,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                          backing: .buffered, defer: false)
         super.init(window: w)
 
-        w.delegate = self
         w.title = isPrivate ? "Lantern Private" : "Lantern 🏮"
         w.titleVisibility = .hidden
         w.titlebarAppearsTransparent = true
@@ -75,6 +77,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
         buildChrome()
         w.contentView = root
+
+        // Order matters: setFrameAutosaveName above restores the saved frame synchronously
+        // and posts windowDidResize. Registering the delegate only now, and laying out
+        // explicitly once the controls exist, keeps layoutChrome() away from nil controls.
+        isChromeReady = true
+        w.delegate = self
+        layoutChrome()
 
         startHibernationTimer()
         startMemoryReadout()
@@ -172,6 +181,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     override func windowDidLoad() { super.windowDidLoad() }
 
     private func layoutChrome() {
+        // Resizes arrive while the window is still being built (the autosaved frame is
+        // restored inside init) or before it has a usable size. Nothing to lay out then,
+        // and the controls below are implicitly unwrapped, so check them explicitly.
+        guard isChromeReady,
+              let win = window, win.frame.width > 0, win.frame.height > 0,
+              root.bounds.width > 0,
+              backButton != nil, forwardButton != nil, reloadButton != nil,
+              bookmarkButton != nil, shieldButton != nil else { return }
         let b = root.bounds
         // Safari's stacking: the toolbar is the top row and the traffic lights sit over it,
         // with the tab strip running the full width beneath.
@@ -240,7 +257,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    func windowDidResize(_ notification: Notification) { layoutChrome() }
+    func windowDidResize(_ notification: Notification) {
+        guard isChromeReady, let win = window, notification.object as? NSWindow === win else { return }
+        layoutChrome()
+    }
 
     func windowDidBecomeKey(_ notification: Notification) {
         activeTab?.lastActive = Date()
