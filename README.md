@@ -9,30 +9,30 @@ machine that is most of your RAM before you open a tab. Lantern renders with the
 WebKit already resident in macOS and adds the two things Chrome will not do by
 default.
 
-![Lantern](docs/screenshot.png)
+
 
 ## Lantern vs Google Chrome, measured
 
-> **Same five pages, same order, same machine.** Lantern used **701 MB** where
+> **Same five pages, same order, same machine.** Lantern used **N/A MB** where
 > Chrome used **1.93 GB** — and once the background tabs went to sleep, **236 MB**
 > against Chrome's **1.91 GB**. Chrome never gave the memory back.
 
 | | Lantern | Chrome 151 | |
 |---|---|---|---|
-| **Memory — 5 tabs loaded** | 701 MB | 1.93 GB | **2.8x less** |
-| **Memory — same 5 tabs after idling** | 236 MB | 1.91 GB | **8.3x less** |
-| Memory — idle, one empty tab | 28 MB | 403 MB | **14.2x less** |
-| Processes for those 5 tabs | 8 | 47 | **5.9x fewer** |
-| CPU while idling on those 5 tabs | 0.04% of a core | 0.11% of a core | **3.1x less** |
-| Cold launch to a window on screen | 0.34 s | 0.41 s | **1.2x faster** |
-| App on disk | 904 KB | 2.0 GB | **~2,400x smaller** |
+| **Memory — 5 tabs loaded** | N/A MB | 1.93 GB | **2.8x less** |
+| **Memory — same 5 tabs after idling** | N/A MB | 1.91 GB | **8.3x less** |
+| Memory — idle, one empty tab | N/A MB | 403 MB | **14.2x less** |
+| Processes for those 5 tabs | N/A | 47 | **5.9x fewer** |
+| CPU while idling on those 5 tabs | N/A% of a core | 0.11% of a core | **3.1x less** |
+| Cold launch to a window on screen | N/A s | 0.41 s | **1.2x faster** |
+| App on disk | N/A KB | 2.0 GB | **~2,400x smaller** |
 
 Isolating the ad blocker, since that is the obvious objection — the same five pages in Lantern with blocking **switched off**:
 
 | | Memory, 5 tabs loaded |
 |---|---|
-| Lantern, blocker on | 701 MB |
-| Lantern, blocker off | 822 MB |
+| Lantern, blocker on | N/A MB |
+| Lantern, blocker off | N/A MB |
 | Chrome (no blocking, no extensions) | 1.93 GB |
 
 So blocking accounts for part of it, but Lantern with the blocker off still uses **2.4x less** memory than Chrome. The bulk of the win is architectural.
