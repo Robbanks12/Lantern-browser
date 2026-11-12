@@ -13,6 +13,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private let root = FlippedView()
     private let tabStrip = TabStripView()
+    /// Viewport for the tab strip. The strip itself is the document view and sizes
+    /// to its row of tabs, so an overflowing row scrolls instead of compressing.
+    private let tabScrollView = TabStripScrollView()
     private let toolbarRow = FlippedView()
     private let progressBar = ProgressBar()
     private let webContainer = FlippedView()
@@ -112,7 +115,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         chromeBackground.state = .followsWindowActiveState
         root.addSubview(chromeBackground)
 
-        root.addSubview(tabStrip)
+        tabScrollView.documentView = tabStrip
+        root.addSubview(tabScrollView)
         root.addSubview(toolbarRow)
         root.addSubview(progressBar)
         root.addSubview(findRow)
@@ -207,7 +211,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let toolRow: CGFloat = 40
 
         toolbarRow.frame = NSRect(x: 0, y: 0, width: b.width, height: toolRow)
-        tabStrip.frame = NSRect(x: 0, y: toolRow, width: b.width, height: tabRow)
+        tabScrollView.frame = NSRect(x: 0, y: toolRow, width: b.width, height: tabRow)
         progressBar.frame = NSRect(x: 0, y: chromeTopHeight - 3, width: b.width, height: 3)
 
         findRow.frame = NSRect(x: 0, y: chromeTopHeight, width: b.width, height: findRowHeight)
