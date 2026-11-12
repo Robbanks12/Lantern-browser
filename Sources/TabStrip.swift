@@ -241,7 +241,17 @@ final class TabStripView: NSView {
     private var items: [TabItemView] = []
     private var dragIndex: Int?
     private var dragGrabX: CGFloat = 0     // where in the tab the press landed
-    private var dragPointerX: CGFloat = 0  // pointer, strip coordinates
+    private var dragPointerX: CGFloat = 0  // pointer, document coordinates
+    /// The view being dragged, tracked by identity. Indices go stale the moment a
+    /// reorder runs; the object does not.
+    private weak var draggedItem: TabItemView?
+    /// Pointer in window coordinates, refreshed on every drag event and tick, so the
+    /// auto-scroll timer can keep working while the pointer sits still.
+    private var lastDragWindowPoint = NSPoint.zero
+    /// Short-lived: only while a drag is parked in the scroll edge zone.
+    private var dragScrollTimer: Timer?
+    /// Last viewport width this view laid out for; the scroll view reports changes.
+    private var lastViewportWidth: CGFloat = -1
 
     override var isFlipped: Bool { true }
 
@@ -287,42 +297,76 @@ final class TabStripView: NSView {
                 : tab.url?.absoluteString ?? tab.displayTitle
         }
         layoutTabs()
+        // A metadata refresh (title, favicon, progress) must not disturb the scroll
+        // position; ensureSelectedVisible only moves a viewport that does not
+        // already show the tab fully. A drag reorder skips this so the auto-scroll
+        // timer stays the only thing moving the viewport mid-drag.
+        if draggedItem == nil { ensureSelectedVisible() }
     }
 
-    /// Safari's bargain: the selected tab keeps a comfortable width so its title
-    /// and close button stay visible, while the rest share what is left. When the
-    /// window is wide every tab expands evenly, capped as before.
+    /// Every tab reads at a glance: the selected tab keeps its full 210pt until
+    /// the viewport itself is narrower, and the rest share the remainder down to
+    /// a 48pt favicon-only floor. Anything beyond that overflows into a scroll
+    /// instead of compressing the row.
     private let maxTabWidth: CGFloat = 210
-    private let minActiveTabWidth: CGFloat = 140
     private let minInactiveTabWidth: CGFloat = 48
+
+    /// The visible width of the strip. Read from the enclosing scroll view's
+    /// viewport — never from this view's own bounds, which once scrolled span
+    /// the whole document.
+    private func viewportWidth() -> CGFloat {
+        let viewport = enclosingScrollView?.contentSize.width ?? bounds.width
+        return max(0, viewport - 6)
+    }
 
     /// One width per item, in `items` order. The selected tab is found by its flag
     /// rather than by an index, because a drag swaps this array around.
     private func tabWidths() -> [CGFloat] {
         let n = items.count
         guard n > 0 else { return [] }
-        let available = max(0, bounds.width - 6)
-        if n == 1 { return [min(maxTabWidth, available)] }
-        if available >= maxTabWidth * CGFloat(n) { return Array(repeating: maxTabWidth, count: n) }
-        let even = available / CGFloat(n)
-        if even >= minActiveTabWidth { return Array(repeating: even, count: n) }
-        // Crowded: pin the selected tab and split the remainder.
+        let available = viewportWidth()
         let selected = items.firstIndex(where: { $0.isSelected }) ?? 0
-        var active = minActiveTabWidth
-        var inactive = (available - active) / CGFloat(n - 1)
-        if inactive < minInactiveTabWidth {
-            // Not even the minimums fit: shrink in proportion so the row still
-            // exactly fills the strip instead of overflowing it.
-            let scale = available / (minActiveTabWidth + CGFloat(n - 1) * minInactiveTabWidth)
-            active = minActiveTabWidth * scale
-            inactive = minInactiveTabWidth * scale
-        }
+        let active = min(maxTabWidth, available)
+        let inactive = min(maxTabWidth, max(minInactiveTabWidth,
+                                           (available - active) / CGFloat(max(1, n - 1))))
         return items.indices.map { $0 == selected ? active : inactive }
+    }
+
+    /// Called by the enclosing scroll view whenever the viewport changes size.
+    /// The document view learns the viewport width only through this path.
+    func viewportSizeDidChange() {
+        let w = enclosingScrollView?.contentSize.width ?? bounds.width
+        guard abs(w - lastViewportWidth) > 0.5 else { return }
+        lastViewportWidth = w
+        layoutTabs()
+    }
+
+    /// Scroll the selected tab into view, but never move a viewport that already
+    /// shows it fully — title, favicon and progress refreshes must not disturb
+    /// the scroll position.
+    private func ensureSelectedVisible() {
+        guard let scrollView = enclosingScrollView,
+              let sel = items.firstIndex(where: { $0.isSelected }),
+              items.indices.contains(sel) else { return }
+        let frame = items[sel].frame
+        if !scrollView.documentVisibleRect.contains(frame) {
+            scrollToVisible(frame)
+        }
     }
 
     private func layoutTabs() {
         guard !items.isEmpty else { return }
+        let viewportHeight = enclosingScrollView?.contentSize.height ?? bounds.height
         let widths = tabWidths()
+        // The document is exactly the row of tabs — never the viewport — so an
+        // overflowing row scrolls instead of compressing. The guard keeps the
+        // frame assignment from scheduling another layout pass.
+        let rowSize = NSSize(width: widths.reduce(0, +), height: viewportHeight)
+        if abs(frame.width - rowSize.width) > 0.5 || abs(frame.height - rowSize.height) > 0.5 {
+            var f = frame
+            f.size = rowSize
+            frame = f
+        }
         var x: CGFloat = 0
         for (i, v) in items.enumerated() {
             if i == dragIndex { x += widths[i]; continue }   // positioned below, on top of the rest
@@ -330,8 +374,7 @@ final class TabStripView: NSView {
             x += widths[i]
         }
         if let d = dragIndex, items.indices.contains(d) {
-            let rowWidth = widths.reduce(0, +)
-            let clamped = max(0, min(rowWidth - widths[d], dragPointerX - dragGrabX))
+            let clamped = max(0, min(rowSize.width - widths[d], dragPointerX - dragGrabX))
             items[d].frame = NSRect(x: clamped, y: 0, width: widths[d], height: bounds.height)
         }
     }
@@ -341,33 +384,19 @@ final class TabStripView: NSView {
     private func beginDrag(_ index: Int, grabX: CGFloat) {
         guard items.indices.contains(index) else { return }
         dragIndex = index
+        draggedItem = items[index]
         dragGrabX = grabX
         dragPointerX = items[index].frame.minX + grabX
         addSubview(items[index])          // raise above its neighbours while moving
     }
 
     private func updateDrag(_ pointerInWindow: NSPoint) {
-        guard let from = dragIndex else { return }
-        guard items.indices.contains(from) else { endDrag(); return }
+        lastDragWindowPoint = pointerInWindow
+        // Already in document coordinates: converting through the scrolled
+        // hierarchy folds the scroll offset in, so no manual offset is needed.
         dragPointerX = convert(pointerInWindow, from: nil).x
-        let widths = tabWidths()
-        guard !widths.isEmpty else { return }
-
-        // The dragged tab's centre decides its slot. Slots are the row's current
-        // cumulative widths, so the index stays right when tabs differ in size.
-        let leadingEdge = dragPointerX - dragGrabX
-        let to = dropIndex(center: leadingEdge + widths[from] / 2, widths: widths)
-        if to != from {
-            // Move the view exactly as the model moves, so items[i] keeps describing
-            // tab i and the view under the pointer stays the one being dragged. The
-            // delegate's update() then rebinds content by index and agrees with us.
-            let moved = items.remove(at: from)
-            items.insert(moved, at: to)
-            dragIndex = to
-            // grabX is preserved so the tab stays under the pointer.
-            delegate?.tabStripDidRequestMove(from: from, to: to)
-        }
-        layoutTabs()
+        reorderDraggedItem()
+        updateDragScrollTimer()
     }
 
     /// The slot whose span contains `center`, found by walking the row's cumulative
@@ -381,9 +410,109 @@ final class TabStripView: NSView {
         return max(0, widths.count - 1)
     }
 
-    private func endDrag() {
-        dragIndex = nil
+    /// Resolve the dragged view to its current index, then move it to the slot
+    /// under the pointer, if that changed anything. Called both from pointer
+    /// movement and from the auto-scroll tick, so a stationary pointer keeps
+    /// reordering as the content slides beneath it.
+    private func reorderDraggedItem() {
+        guard let dragged = draggedItem,
+              let from = items.firstIndex(where: { $0 === dragged }) else {
+            endDrag()
+            return
+        }
+        dragIndex = from
+        let widths = tabWidths()
+        guard !widths.isEmpty else { return }
+        let to = dropIndex(center: dragPointerX - dragGrabX + widths[from] / 2, widths: widths)
+        if to != from {
+            // Move the view exactly as the model moves, so items[i] keeps describing
+            // tab i and the view under the pointer stays the one being dragged. The
+            // delegate's update() then rebinds content by index and agrees with us.
+            let moved = items.remove(at: from)
+            items.insert(moved, at: to)
+            dragIndex = to
+            // grabX is preserved so the tab stays under the pointer.
+            delegate?.tabStripDidRequestMove(from: from, to: to)
+        }
         layoutTabs()
+    }
+
+    private func endDrag() {
+        invalidateDragScrollTimer()
+        dragIndex = nil
+        draggedItem = nil
+        layoutTabs()
+    }
+
+    deinit { invalidateDragScrollTimer() }
+
+    // MARK: - Drag edge auto-scroll
+
+    /// How close to the visible edge the pointer must be before the strip
+    /// scrolls on its own, in points.
+    private let autoScrollEdgeZone: CGFloat = 28
+    private let autoScrollStep: CGFloat = 14
+
+    private enum AutoScrollDirection { case left, right }
+
+    /// Which way the content should move to follow a drag held in the edge zone,
+    /// or nil when there is nothing to scroll or the pointer is not near an edge.
+    private func autoScrollDirection() -> AutoScrollDirection? {
+        guard draggedItem != nil, let scrollView = enclosingScrollView else { return nil }
+        let visible = scrollView.documentVisibleRect
+        let contentWidth = tabWidths().reduce(0, +)
+        guard visible.width < contentWidth - 1 else { return nil }
+        if dragPointerX < visible.minX + autoScrollEdgeZone, visible.minX > 1 { return .left }
+        if dragPointerX > visible.maxX - autoScrollEdgeZone, visible.maxX < contentWidth - 1 { return .right }
+        return nil
+    }
+
+    /// Started and stopped from the drag path only. The timer is the only thing
+    /// that scrolls without pointer movement, and it is always short-lived:
+    /// every exit below invalidates it.
+    private func updateDragScrollTimer() {
+        guard autoScrollDirection() != nil else {
+            invalidateDragScrollTimer()
+            return
+        }
+        guard dragScrollTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            self?.dragScrollTick()
+        }
+        // Event tracking, not the default mode: mouseDragged runs there, and a
+        // default-mode timer would stall for the whole drag.
+        RunLoop.main.add(timer, forMode: .common)
+        dragScrollTimer = timer
+    }
+
+    private func invalidateDragScrollTimer() {
+        dragScrollTimer?.invalidate()
+        dragScrollTimer = nil
+    }
+
+    /// One auto-scroll step. Re-derives the pointer in document coordinates
+    /// (which move as the content scrolls) and recalculates the drop index from
+    /// scratch, so the tab keeps reordering under a stationary pointer.
+    private func dragScrollTick() {
+        guard draggedItem != nil, let scrollView = enclosingScrollView else {
+            endDrag()
+            return
+        }
+        guard autoScrollDirection() != nil else {
+            invalidateDragScrollTimer()
+            return
+        }
+        var origin = scrollView.contentView.bounds.origin
+        origin.x += autoScrollDirection() == .right ? autoScrollStep : -autoScrollStep
+        let contentWidth = tabWidths().reduce(0, +)
+        let maxX = max(0, contentWidth - scrollView.documentVisibleRect.width)
+        origin.x = min(max(origin.x, 0), maxX)
+        scrollView.contentView.scroll(to: origin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+
+        // The window point did not move, but the document slid under it.
+        dragPointerX = convert(lastDragWindowPoint, from: nil).x
+        reorderDraggedItem()
     }
 
     override func layout() {
@@ -404,6 +533,42 @@ final class TabStripView: NSView {
             return
         }
         super.mouseDown(with: event)
+    }
+}
+
+/// The tab strip's viewport. It owns the visible size; the document view
+/// (TabStripView) owns its own width, which is the row of tabs. No scrollers:
+/// tabs scroll with the trackpad and the drag timer, and the chrome stays flat.
+final class TabStripScrollView: NSScrollView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        hasVerticalScroller = false
+        hasHorizontalScroller = false
+        drawsBackground = false
+        borderType = .noBorder
+        horizontalScrollElasticity = .none
+        verticalScrollElasticity = .none
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        // The viewport changed size; the document view resizes from this, never
+        // from its own bounds, which span the whole scrolled row.
+        (documentView as? TabStripView)?.viewportSizeDidChange()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        // The clip view fills the viewport even where the document does not; hand
+        // those presses to the document view so empty-space behaviour — double-
+        // click for a new tab, single-click window drag — is identical whether or
+        // not the row fills the viewport.
+        if hit === contentView, let strip = documentView as? TabStripView {
+            return strip
+        }
+        return hit
     }
 }
 
