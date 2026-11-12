@@ -308,11 +308,17 @@ extension Tab: WKNavigationDelegate {
         let ns = error as NSError
         // -999 is "cancelled", which happens on every normal redirect/stop.
         guard ns.code != NSURLErrorCancelled else { return }
-        // 102 is "frame load interrupted by policy change". The system took the
-        // navigation over (an app link) or we deliberately cancelled it for a new
-        // tab, so there is no page to report — stay silent instead of painting an
-        // error over the page the user is on.
-        guard !NavigationPolicy.isFrameLoadInterrupted(ns) else { return }
+        // 102 is "frame load interrupted by policy change": the load never
+        // committed. Either we cancelled it ourselves (external scheme, cmd-click
+        // into a new tab) or the system took it over for an app link, so there is
+        // no page to report — stay silent instead of painting an error over the
+        // page the user is on. Log the host alone, so a residual interception is
+        // still diagnosable without recording where the user was browsing.
+        guard !NavigationPolicy.isFrameLoadInterrupted(ns) else {
+            let interruptedURL = ns.userInfo[NSURLErrorFailingURLStringErrorKey] as? String
+            NSLog("Lantern: load interrupted by policy on \(NavigationPolicy.originDescription(of: interruptedURL))")
+            return
+        }
         let failing = (ns.userInfo[NSURLErrorFailingURLStringErrorKey] as? String) ?? url?.absoluteString ?? ""
         let host = URL(string: failing)?.host ?? failing
         let html = """
