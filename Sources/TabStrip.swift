@@ -178,12 +178,16 @@ final class TabItemView: NSView {
             arc.stroke()
         } else if let icon = favicon {
             let rect = NSRect(x: x, y: iconY, width: iconSize, height: iconSize)
+            // This view is flipped, and without respectFlipped the image maps with
+            // its origin at the wrong corner and renders upside down.
             if isHibernated {
                 NSGraphicsContext.current?.saveGraphicsState()
-                icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.45)
+                icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.45,
+                          respectFlipped: true, hints: nil)
                 NSGraphicsContext.current?.restoreGraphicsState()
             } else {
-                icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+                icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0,
+                          respectFlipped: true, hints: nil)
             }
         } else {
             // Letter tile fallback so tabs never look empty.
