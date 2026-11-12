@@ -3,90 +3,7 @@
 A minimal macOS web browser. A single ~900 KB app bundle, no dependencies, no bundled
 engine, no background services.
 
-Built because Chrome ships its own entire copy of Chromium plus a GPU process, a
-network service, extension hosts, an updater and telemetry daemons — on an 8 GB
-machine that is most of your RAM before you open a tab. Lantern renders with the
-WebKit already resident in macOS and adds the two things Chrome will not do by
-default.
-
-
-
-## Lantern vs Google Chrome, measured
-
-> **Same five pages, same order, same machine.** Lantern used **N/A MB** where
-> Chrome used **1.93 GB** — and once the background tabs went to sleep, **236 MB**
-> against Chrome's **1.91 GB**. Chrome never gave the memory back.
-
-| | Lantern | Chrome 151 | |
-|---|---|---|---|
-| **Memory — 5 tabs loaded** | N/A MB | 1.93 GB | **2.8x less** |
-| **Memory — same 5 tabs after idling** | N/A MB | 1.91 GB | **8.3x less** |
-| Memory — idle, one empty tab | N/A MB | 403 MB | **14.2x less** |
-| Processes for those 5 tabs | N/A | 47 | **5.9x fewer** |
-| CPU while idling on those 5 tabs | N/A% of a core | 0.11% of a core | **3.1x less** |
-| Cold launch to a window on screen | N/A s | 0.41 s | **1.2x faster** |
-| App on disk | N/A KB | 2.0 GB | **~2,400x smaller** |
-
-Isolating the ad blocker, since that is the obvious objection — the same five pages in Lantern with blocking **switched off**:
-
-| | Memory, 5 tabs loaded |
-|---|---|
-| Lantern, blocker on | N/A MB |
-| Lantern, blocker off | N/A MB |
-| Chrome (no blocking, no extensions) | 1.93 GB |
-
-So blocking accounts for part of it, but Lantern with the blocker off still uses **2.4x less** memory than Chrome. The bulk of the win is architectural.
-
-### How this was measured
-
-Every number above comes from `./tools/bench.sh`, which you can run yourself. It
-opens the **same five pages in the same order** in each browser
-— Wikipedia, Hacker News, GitHub Trending, The Verge and CNN — waits for them to
-settle, then reads `phys_footprint` and CPU time per process straight from the
-kernel. That is the same figure Activity Monitor's Memory column shows, and helper
-processes are attributed to their parent app exactly the way Activity Monitor does
-it (`responsibility_get_pid_responsible_for_pid`). The table in this README is
-generated from the raw measurement file by `tools/bench-table.py`, not typed by
-hand.
-
-Things that are deliberately **generous to Chrome**, so you can trust the gap:
-
-- Chrome runs on a **throwaway `--user-data-dir`**, so it has **no extensions**
-  loaded. A real Chrome with an ad blocker, a password manager and a long history is
-  heavier than what is measured here. All browsing data for the run — history,
-  cookies, cache — goes to that throwaway directory, not your real profile. (Chrome
-  still writes some of its own machine-level metadata, such as crash and metrics
-  caches, to the default location on any launch; that is Chrome's behaviour, not
-  something the benchmark controls.) The script refuses to measure at all unless it
-  can confirm Chrome is on the throwaway profile, and refuses to start if another
-  Chrome is already running, so it can never fold your real session into the numbers.
-- Chrome's **first-run launch is discarded** before timing, so startup is measured
-  warm, not cold-from-install.
-- The third table isolates ad blocking: Lantern with its blocker **switched off**
-  still uses far less memory, so the win is architectural, not just "it blocks ads".
-
-And the honest caveats:
-
-- **One machine, one run** (M1, 8 GB, macOS 26.5). Expect variance, especially on
-  the ad-heavy pages, whose weight changes with whatever ads happen to be served.
-- Chrome's high process count is partly **site isolation**, a real security feature
-  that costs memory. Lantern does not match it; WebKit isolates less aggressively.
-- Chrome has a **Memory Saver** that discards inactive tabs, but it works on a much
-  longer timescale than this test and did not trigger. Over hours, Chrome's idle
-  number would improve.
-- For a short test the sleep threshold was lowered to **1 minute**
-  (`hibernateAfterMinutes`); the shipped default is 5.
-- **CPU at rest is deliberately not reported.** Lantern destroys tab processes during
-  that window, and summing per-process CPU counters loses the time used by processes
-  that no longer exist, so the figure would come out negative and meaningless.
-- The blocker-off row is **memory only**. It was captured in the same session but
-  before a fix to which tab gets focus, and focus materially changes CPU.
-- Which tab is in the **foreground** matters more than you would guess: with an
-  ad-heavy page focused instead of a static one, Lantern's idle CPU measured 1.07%
-  rather than 0.04%. Both browsers are given the same foreground page.
-- Lantern cannot win a like-for-like *rendering* benchmark — it is the same WebKit
-  everyone else's Safari uses. The gains here are in what a browser wraps around an
-  engine, not the engine.
+Lantern renders with the WebKit already resident in macOS, It prioritizes low memory usage, native speed, and local privacy without the bloat of background updaters, telemetry daemons, or extension hosts.
 
 ## What actually makes it light
 
@@ -97,8 +14,7 @@ measures ~30 MB. There is no updater, no telemetry, no extension host, no sync.
 **2. Tabs that really sleep.** A background tab idle for 5 minutes has its WebKit
 content process *destroyed*, not throttled. What survives is the URL, the title and
 `interactionState` — a WebKit blob holding the full back/forward list and scroll
-position, a couple of KB. Click the tab and it comes back where you left it. Chrome
-and Safari only throttle timers; the ~50–300 MB per tab stays resident.
+position, a couple of KB. Click the tab and it comes back where you left it. 
 
 Sleeping also happens immediately when macOS reports memory pressure, so Lantern
 gives memory back to the system instead of competing for it.
@@ -173,7 +89,7 @@ To make it your default browser: **Lantern → Make Lantern the Default Browser*
 | `⌘+` / `⌘-` / `⌘0` | zoom |
 | `⌘⇧H` | put all background tabs to sleep now |
 | `⌘⇧J` | open Downloads folder |
-| `⌘,` | settings (opens config.json) |
+| `⌘,` | settings |
 
 **Mouse.** Middle-click or ⌘-click a link opens it in a background tab.
 Middle-click a tab closes it. **Drag a tab** to reorder it. **Right-click a tab** for
@@ -213,7 +129,7 @@ plain files; nothing is a database.
 | | |
 |---|---|
 | `Sources/Tab.swift` | tab model, hibernate/wake, WebKit delegates |
-| `Sources/BrowserWindowController.swift` | window chrome, tab switching, timers |
+| `Sources/BrowserWindowController.swift` | window , tab switching, timers |
 | `Sources/ContentBlocker.swift` | domain list → compiled WebKit rule list |
 | `Sources/MemoryMonitor.swift` | per-process footprint, Activity-Monitor-style attribution |
 | `Sources/TabStrip.swift` | hand-drawn tab strip, tab context menu |
