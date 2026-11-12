@@ -25,10 +25,12 @@ final class StartView: NSView {
     func rebuild() {
         subviews.forEach { $0.removeFromSuperview() }
 
-        let title = NSTextField(labelWithString: "Lantern 🏮")
-        title.font = .systemFont(ofSize: 30, weight: .semibold)
-        title.textColor = .labelColor
+        // One attributed line, three runs: SF Pro for the Latin text, PingFang SC
+        // for the characters, the system font again for the emoji. Mixing runs in a
+        // single label keeps them on a shared baseline and needs no extra views.
+        let title = NSTextField(labelWithAttributedString: StartView.brandTitle(size: 30))
         title.alignment = .center
+        title.textColor = .labelColor
         addSubview(title)
 
         let sub = NSTextField(labelWithString: "\u{2318}L to go somewhere")
@@ -64,6 +66,28 @@ final class StartView: NSView {
         needsLayout = true
     }
 
+    /// "Lantern 灯笼 🏮": PingFang SC Semibold for the characters, the system font
+    /// (SF Pro) for the name and the emoji. Every font request falls back to the
+    /// Latin font, so the line still renders if PingFang is unavailable.
+    private static func brandTitle(size: CGFloat) -> NSAttributedString {
+        let latin = NSFont.systemFont(ofSize: size, weight: .bold)
+        let han = NSFont(name: "PingFangSC-Semibold", size: size)
+            ?? NSFont(name: "PingFang SC", size: size)
+            ?? latin
+
+        var attrs: [NSAttributedString.Key: Any] = [
+            .font: latin,
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let result = NSMutableAttributedString()
+        result.append(NSAttributedString(string: "Lantern ", attributes: attrs))
+        attrs[.font] = han
+        result.append(NSAttributedString(string: "灯笼", attributes: attrs))
+        attrs[.font] = latin
+        result.append(NSAttributedString(string: " 🏮", attributes: attrs))
+        return result
+    }
+
     @objc private func openSite(_ sender: NSButton) {
         if let id = sender.identifier?.rawValue { onOpen?(id) }
     }
@@ -75,8 +99,10 @@ final class StartView: NSView {
 
         let centerY = bounds.height * 0.34
         if labels.count >= 2 {
-            labels[0].frame = NSRect(x: 0, y: centerY, width: bounds.width, height: 38)
-            labels[1].frame = NSRect(x: 0, y: centerY + 40, width: bounds.width, height: 18)
+            // 40 rather than 38: a 30pt emoji glyph has a taller line box than SF Pro
+            // and would otherwise clip at the top of the label.
+            labels[0].frame = NSRect(x: 0, y: centerY, width: bounds.width, height: 40)
+            labels[1].frame = NSRect(x: 0, y: centerY + 42, width: bounds.width, height: 18)
         }
 
         guard !buttons.isEmpty else { return }

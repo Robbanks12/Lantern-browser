@@ -36,10 +36,17 @@ final class TabItemView: NSView {
     override var isFlipped: Bool { true }
 
     private var showsTitle: Bool { bounds.width >= 76 }
-    private var showsClose: Bool { bounds.width >= 58 && (hovering || isSelected) }
+    /// Safari keeps the close button's slot even while the button is hidden, so the
+    /// icon and title do not shift sideways when the tab is hovered.
+    private var hasCloseSlot: Bool { bounds.width >= 58 }
+    private var showsClose: Bool { hasCloseSlot && (hovering || isSelected) }
+    /// Leading edge, like Safari — the tab title no longer runs into it.
     private var closeRect: NSRect {
-        NSRect(x: bounds.maxX - 22, y: (bounds.height - 16) / 2, width: 16, height: 16)
+        NSRect(x: bounds.minX + 5, y: (bounds.height - 16) / 2, width: 16, height: 16)
     }
+    /// The band left for the icon and title, after the close button's slot.
+    private var contentLeft: CGFloat { hasCloseSlot ? closeRect.maxX + 4 : bounds.minX + 7 }
+    private var contentRight: CGFloat { bounds.maxX - 7 }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -62,7 +69,15 @@ final class TabItemView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        if showsClose, closeRect.contains(p) { onClose?(); return }
+        // The close button is its own control: swallow the press here, before
+        // pressPoint is recorded, so a click (or a press-and-drag) that starts on it
+        // can never become a tab press or begin the drag-to-reorder gesture.
+        if showsClose, closeRect.contains(p) {
+            pressPoint = nil
+            dragging = false
+            onClose?()
+            return
+        }
         if event.type == .otherMouseDown { onClose?(); return }
         pressPoint = p
         onSelect?()   // select on press, like Safari, so dragging the current tab feels direct
@@ -118,8 +133,28 @@ final class TabItemView: NSView {
             path.fill()
         }
 
-        var x = r.minX + 8.0
+        // Safari parity: the close button owns the leading edge, so the title is
+        // measured first and the icon + title are then centred as one group in the
+        // band that is left. Nothing here is laid out by hand twice.
         let iconSize: CGFloat = 16
+        let iconGap: CGFloat = 6
+        let available = max(0, contentRight - contentLeft)
+
+        let titleColor: NSColor = isSelected ? .labelColor
+            : (isHibernated ? .tertiaryLabelColor : .secondaryLabelColor)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let titleAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: isSelected ? .medium : .regular),
+            .foregroundColor: titleColor,
+            .paragraphStyle: paragraph,
+        ]
+        let titleString = showsTitle ? NSAttributedString(string: title, attributes: titleAttrs) : nil
+        let maxTitleWidth = max(0, available - iconSize - iconGap)
+        let titleWidth = titleString.map { min($0.size().width.rounded(.up), maxTitleWidth) } ?? 0
+        let groupWidth = iconSize + (titleWidth > 0 ? iconGap + titleWidth : 0)
+
+        var x = contentLeft + max(0, (available - groupWidth) / 2)
         let iconY = (bounds.height - iconSize) / 2
 
         if isLoading {
@@ -136,7 +171,6 @@ final class TabItemView: NSView {
             NSColor.controlAccentColor.setStroke()
             arc.lineWidth = 2
             arc.stroke()
-            x += iconSize + 6
         } else if let icon = favicon {
             let rect = NSRect(x: x, y: iconY, width: iconSize, height: iconSize)
             if isHibernated {
@@ -146,7 +180,6 @@ final class TabItemView: NSView {
             } else {
                 icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
             }
-            x += iconSize + 6
         } else {
             // Letter tile fallback so tabs never look empty.
             let letter = String(title.first.map(String.init)?.uppercased() ?? "\u{2022}")
@@ -161,31 +194,19 @@ final class TabItemView: NSView {
             let s = NSAttributedString(string: letter, attributes: attrs)
             let sz = s.size()
             s.draw(at: NSPoint(x: rect.midX - sz.width / 2, y: rect.midY - sz.height / 2))
-            x += iconSize + 6
         }
+        x += iconSize
 
-        if showsTitle {
-            let rightPad: CGFloat = showsClose ? 26 : 8
-            let width = max(0, r.maxX - x - rightPad)
-            if width > 8 {
-                let color: NSColor = isSelected ? .labelColor
-                    : (isHibernated ? .tertiaryLabelColor : .secondaryLabelColor)
-                let ps = NSMutableParagraphStyle()
-                ps.lineBreakMode = .byTruncatingTail
-                let attrs: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.systemFont(ofSize: 12, weight: isSelected ? .medium : .regular),
-                    .foregroundColor: color,
-                    .paragraphStyle: ps,
-                ]
-                let s = NSAttributedString(string: title, attributes: attrs)
-                let h = s.size().height
-                s.draw(with: NSRect(x: x, y: bounds.midY - h / 2, width: width, height: h),
-                       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
-            }
+        if let titleString, titleWidth > 0 {
+            x += iconGap
+            let h = titleString.size().height
+            titleString.draw(with: NSRect(x: x, y: bounds.midY - h / 2, width: maxTitleWidth, height: h),
+                             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         }
 
         if isPrivate {
-            let dot = NSBezierPath(ovalIn: NSRect(x: r.minX + 3, y: r.minY + 3, width: 5, height: 5))
+            // Moved to the trailing edge: the leading corner is the close button now.
+            let dot = NSBezierPath(ovalIn: NSRect(x: bounds.maxX - 9, y: r.minY + 2.5, width: 5, height: 5))
             NSColor.systemPurple.setFill()
             dot.fill()
         }
