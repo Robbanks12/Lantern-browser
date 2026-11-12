@@ -71,8 +71,10 @@ enum NavigationPolicy {
     /// our own `.cancel` for an external scheme or a new-tab click, or the system
     /// taking an http(s) URL over for an app.
     static func isFrameLoadInterrupted(_ error: NSError) -> Bool {
-        guard error.code == WKError.Code.frameLoadInterruptedByPolicyChange.rawValue else { return false }
-        return error.domain == "WebKitErrorDomain" || error.domain == WKErrorDomain
+        // Use the legacy global constant for WebKit error 102, 
+        // as WKError.Code does not expose this case.
+        return error.domain == "WebKitErrorDomain" && 
+               error.code == WebKitErrorFrameLoadInterruptedByPolicyChange
     }
 
     /// `scheme://host` for a URL string, or `unknown host`.
