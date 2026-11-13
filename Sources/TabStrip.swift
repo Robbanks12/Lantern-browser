@@ -464,6 +464,10 @@ final class TabStripView: NSView {
     /// Window-teardown entry point: safe to call whether or not a drag is active.
     func cancelDrag() { endDrag() }
 
+    /// Read-only: true while a tab is being dragged. Full-screen chrome auto-hide
+    /// keeps the chrome on screen for the whole gesture.
+    var isDraggingTab: Bool { draggedItem != nil }
+
     deinit { invalidateDragScrollTimer() }
 
     // MARK: - Drag edge auto-scroll
