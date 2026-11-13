@@ -97,6 +97,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         w.backgroundColor = .windowBackgroundColor
         if #available(macOS 11.0, *) { w.titlebarSeparatorStyle = .none }
 
+        // An empty toolbar gives the full-screen machinery something to collapse:
+        // with no NSToolbar, macOS keeps the native titlebar (traffic lights) as a
+        // permanent extra row in full screen. Empty, separator-less and without
+        // items it adds no height, so windowed mode is pixel-identical; in full
+        // screen it auto-hides with the menu bar and reveals with it on hover.
+        let toolbar = NSToolbar(identifier: "LanternToolbar")
+        toolbar.showsBaselineSeparator = false
+        w.toolbar = toolbar
+
         buildChrome()
         w.contentView = root
 
@@ -109,7 +118,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         // Full-screen chrome behaviour lives in its own controller; it only needs
         // the two views and the callbacks below.
         fullScreenChrome = FullScreenChromeController(window: w, root: root,
-                                                      chrome: chromeView, host: self)
+                                                      chrome: chromeView, web: webContainer,
+                                                      host: self)
         layoutChrome()
 
         startHibernationTimer()
@@ -358,6 +368,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     func windowDidExitFullScreen(_ notification: Notification) {
         guard let win = window, notification.object as? NSWindow === win else { return }
         fullScreenChrome?.windowDidExitFullScreen()
+    }
+
+    /// Full-screen presentation: hide the (empty) toolbar and the menu bar with
+    /// the content, and bring them back together on a top-edge hover — the same
+    /// hover that fires our reveal band, so both appear simultaneously. The union
+    /// preserves whatever the system proposed (fullScreen, dock handling).
+    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions) -> NSApplication.PresentationOptions {
+        proposedOptions.union([.autoHideToolbar, .autoHideMenuBar])
     }
 
     func windowDidBecomeKey(_ notification: Notification) {

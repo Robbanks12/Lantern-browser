@@ -31,6 +31,7 @@ final class FullScreenChromeController: NSResponder {
     private weak var hostWindow: NSWindow?
     private weak var root: NSView?
     private weak var chrome: NSView?
+    private weak var web: NSView?
 
     /// True between windowDidEnterFullScreen and windowDidExitFullScreen.
     private(set) var isFullScreen = false
@@ -39,6 +40,7 @@ final class FullScreenChromeController: NSResponder {
 
     private var revealArea: NSTrackingArea?
     private var chromeArea: NSTrackingArea?
+    private var webArea: NSTrackingArea?
     private var revealRect: NSRect = .zero
 
     /// Height of the permanent top-edge band that summons the chrome. As tall as
@@ -49,10 +51,11 @@ final class FullScreenChromeController: NSResponder {
     /// Matches the system's own full-screen chrome reveal.
     static let slideDuration: TimeInterval = 0.18
 
-    init(window: NSWindow, root: NSView, chrome: NSView, host: FullScreenChromeHost) {
+    init(window: NSWindow, root: NSView, chrome: NSView, web: NSView, host: FullScreenChromeHost) {
         self.hostWindow = window
         self.root = root
         self.chrome = chrome
+        self.web = web
         self.host = host
         super.init()
     }
@@ -75,6 +78,7 @@ final class FullScreenChromeController: NSResponder {
         isFullScreen = true
         isChromeVisible = false
         installRevealTracking()
+        installWebTracking()
         host?.applyChromeVisibility(animated: false, completion: nil)
         // The pointer may already be resting on the top edge (green button, then
         // moving up). AppKit will not synthesise a mouseEntered for an area that
@@ -149,6 +153,31 @@ final class FullScreenChromeController: NSResponder {
         }
     }
 
+    /// The most robust "user is done with the chrome" signal: the pointer
+    /// arriving in the page itself. It fires no matter which path the pointer
+    /// took out of the chrome — through its bottom edge, past it during a fast
+    /// move, or while the chrome was mid-slide — because AppKit synthesises an
+    /// entered event whenever the pointer crosses into the web's visible rect,
+    /// including when the web grows underneath a stationary pointer. Tracking
+    /// areas only observe, so this never steals a click from the page.
+    /// `.inVisibleRect` follows resizes automatically; the area lives only for
+    /// the full-screen session.
+    private func installWebTracking() {
+        guard let web = web, webArea == nil else { return }
+        let area = NSTrackingArea(rect: web.bounds,
+                                  options: [.mouseEnteredAndExited, .inVisibleRect, .activeInKeyWindow],
+                                  owner: self, userInfo: nil)
+        web.addTrackingArea(area)
+        webArea = area
+    }
+
+    private func removeWebTracking() {
+        if let webArea = webArea {
+            web?.removeTrackingArea(webArea)
+            self.webArea = nil
+        }
+    }
+
     private func removeTrackingAreas() {
         if let revealArea = revealArea {
             root?.removeTrackingArea(revealArea)
@@ -156,6 +185,7 @@ final class FullScreenChromeController: NSResponder {
         }
         revealRect = .zero
         removeChromeTracking()
+        removeWebTracking()
     }
 
     // MARK: - Pointer
@@ -165,6 +195,10 @@ final class FullScreenChromeController: NSResponder {
         // Entering the chrome needs no work: being inside it is what keeps it up.
         if let revealArea = revealArea, event.trackingArea === revealArea {
             reveal(animated: true)
+        } else if let webArea = webArea, event.trackingArea === webArea {
+            // The pointer has arrived in the page: hide, subject to the usual
+            // pinned checks inside hideIfPossible().
+            hideIfPossible()
         }
     }
 
