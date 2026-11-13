@@ -28,7 +28,7 @@ protocol FullScreenChromeHost: AnyObject {
 final class FullScreenChromeController: NSResponder {
 
     private weak var host: FullScreenChromeHost?
-    private weak var window: NSWindow?
+    private weak var hostWindow: NSWindow?
     private weak var root: NSView?
     private weak var chrome: NSView?
 
@@ -50,12 +50,16 @@ final class FullScreenChromeController: NSResponder {
     static let slideDuration: TimeInterval = 0.18
 
     init(window: NSWindow, root: NSView, chrome: NSView, host: FullScreenChromeHost) {
-        self.window = window
+        self.hostWindow = window
         self.root = root
         self.chrome = chrome
         self.host = host
         super.init()
     }
+
+    /// NSResponder declares this designated initializer as required. The controller
+    /// is only ever built from a window, so there is no archive to decode.
+    required init?(coder: NSCoder) { fatalError() }
 
     /// Where the chrome sits vertically: 0 while shown, -height while hidden so
     /// the web content can fill the window with nothing left behind.
@@ -94,7 +98,7 @@ final class FullScreenChromeController: NSResponder {
     /// Geometry changed (window resize, find bar shown/hidden). The reveal band
     /// spans the content root's width, so it is rebuilt when that width moves.
     func layoutDidChange() {
-        guard isFullScreen, let root else { return }
+        guard isFullScreen, let root = root else { return }
         let rect = NSRect(x: 0, y: 0, width: max(1, root.bounds.width),
                           height: Self.revealZoneHeight)
         if rect != revealRect { installRevealTracking() }
@@ -114,8 +118,8 @@ final class FullScreenChromeController: NSResponder {
     /// Attached to the content root, not to the chrome, so it stays active no
     /// matter what the chrome is doing.
     private func installRevealTracking() {
-        guard let root else { return }
-        if let revealArea { root.removeTrackingArea(revealArea) }
+        guard let root = root else { return }
+        if let revealArea = revealArea { root.removeTrackingArea(revealArea) }
         let rect = NSRect(x: 0, y: 0, width: max(1, root.bounds.width),
                           height: Self.revealZoneHeight)
         // The root is flipped, so y 0 is the top edge of the app's content.
@@ -130,7 +134,7 @@ final class FullScreenChromeController: NSResponder {
     /// Only installed while the chrome is on screen: it exists to notice the
     /// pointer leaving the whole toolbar + tab strip band.
     private func installChromeTracking() {
-        guard let chrome, chromeArea == nil else { return }
+        guard let chrome = chrome, chromeArea == nil else { return }
         let area = NSTrackingArea(rect: chrome.bounds,
                                   options: [.mouseEnteredAndExited, .inVisibleRect, .activeInKeyWindow],
                                   owner: self, userInfo: nil)
@@ -139,14 +143,14 @@ final class FullScreenChromeController: NSResponder {
     }
 
     private func removeChromeTracking() {
-        if let chromeArea {
+        if let chromeArea = chromeArea {
             chrome?.removeTrackingArea(chromeArea)
             self.chromeArea = nil
         }
     }
 
     private func removeTrackingAreas() {
-        if let revealArea {
+        if let revealArea = revealArea {
             root?.removeTrackingArea(revealArea)
             self.revealArea = nil
         }
@@ -159,7 +163,7 @@ final class FullScreenChromeController: NSResponder {
     override func mouseEntered(with event: NSEvent) {
         guard isFullScreen else { return }
         // Entering the chrome needs no work: being inside it is what keeps it up.
-        if let revealArea, event.trackingArea === revealArea {
+        if let revealArea = revealArea, event.trackingArea === revealArea {
             reveal(animated: true)
         }
     }
@@ -176,7 +180,7 @@ final class FullScreenChromeController: NSResponder {
         // Leaving the top band must not hide anything: the pointer is on its way
         // down into the chrome it just revealed. Only the chrome's own exit —
         // leaving the entire toolbar + tab strip — can hide it.
-        if let chromeArea, event.trackingArea === chromeArea {
+        if let chromeArea = chromeArea, event.trackingArea === chromeArea {
             hideIfPossible()
         }
     }
@@ -189,7 +193,7 @@ final class FullScreenChromeController: NSResponder {
     /// Hide only when nothing else is going on and the pointer really is away.
     private func hideIfPossible() {
         guard isFullScreen, isChromeVisible else { return }
-        guard let window, window.isKeyWindow else { return }
+        guard let keyWindow = hostWindow, keyWindow.isKeyWindow else { return }
         // A context menu, a drag or a press in flight keeps the chrome where it is.
         if let type = NSApp.currentEvent?.type, type == .rightMouseDown || type == .rightMouseUp { return }
         if host?.isChromeInteractionPinned == true { return }
@@ -227,17 +231,17 @@ final class FullScreenChromeController: NSResponder {
     }
 
     private func pointerLocationInRoot() -> NSPoint? {
-        guard let root, let window else { return nil }
-        return root.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard let root = root, let hostWindow = hostWindow else { return nil }
+        return root.convert(hostWindow.mouseLocationOutsideOfEventStream, from: nil)
     }
 
     private func pointerIsInsideChrome() -> Bool {
-        guard let chrome, let p = pointerLocationInRoot() else { return true }
+        guard let chrome = chrome, let p = pointerLocationInRoot() else { return true }
         return chrome.frame.contains(p)
     }
 
     private func pointerIsInRevealZone() -> Bool {
-        guard let root, let p = pointerLocationInRoot() else { return false }
+        guard let root = root, let p = pointerLocationInRoot() else { return false }
         return NSRect(x: 0, y: 0, width: root.bounds.width,
                       height: Self.revealZoneHeight).contains(p)
     }

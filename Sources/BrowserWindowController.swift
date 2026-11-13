@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import WebKit
 
 final class FlippedView: NSView {
