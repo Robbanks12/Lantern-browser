@@ -5,20 +5,6 @@ final class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
-/// Flipped container for the titlebar accessory. Manual frames inside use the
-/// same top-down coordinates as the old in-content chrome.
-final class BrowserChromeView: NSView {
-    override var isFlipped: Bool { true }
-}
-
-/// Hosts the browser chrome in the native titlebar area. In windowed mode AppKit
-/// lays this out below the titlebar; in full screen it hides with the menu bar
-/// and both reveal on a top-edge hover — all managed by AppKit, with no timers
-/// or event monitors on our side.
-final class BrowserChromeViewController: NSTitlebarAccessoryViewController {
-    override func loadView() { view = BrowserChromeView() }
-}
-
 final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private(set) var tabs: [Tab] = []
@@ -37,12 +23,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private let chromeBackground = NSVisualEffectView()
     private let hairline = HairlineView()
-    /// Titlebar accessory hosting the whole chrome (toolbar, tabs, progress,
-    /// find, background, hairline). The web content stays in the contentView.
-    private let chromeVC = BrowserChromeViewController()
-    /// Height constraint is the accessory's contract with the window: AppKit reads
-    /// it during window layout and derives contentLayoutRect from it.
-    private var chromeHeightConstraint: NSLayoutConstraint?
 
     private var backButton: ToolbarButton!
     private var forwardButton: ToolbarButton!
@@ -72,11 +52,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     /// Most recently closed tabs, for Reopen Closed Tab.
     private var closedTabs: [SavedTab] = []
 
-    /// Single source of truth for chrome geometry. The old 36 + 38 constant (74)
-    /// never matched the actual rows (40 + 36 = 76); these do.
-    private let toolbarRowHeight: CGFloat = 40
-    private let tabRowHeight: CGFloat = 36
-    private var chromeHeight: CGFloat { toolbarRowHeight + tabRowHeight }
+    private let chromeTopHeight: CGFloat = 36 + 38
     private var findRowHeight: CGFloat { findVisible ? 34 : 0 }
     /// Set once buildChrome() has created every control. layoutChrome() is a no-op before
     /// that, because the window can post a resize while it is still being constructed.
@@ -88,11 +64,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     init(isPrivate: Bool = false) {
         self.isPrivateWindow = isPrivate
-        // No .fullSizeContentView: the chrome now lives in a titlebar accessory
-        // below a real titlebar, so the content must start below the titlebar
-        // instead of rendering underneath it.
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
-                         styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                         styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                          backing: .buffered, defer: false)
         super.init(window: w)
 
@@ -140,24 +113,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         chromeBackground.material = .titlebar
         chromeBackground.blendingMode = .withinWindow
         chromeBackground.state = .followsWindowActiveState
-        // The chrome moves into the titlebar accessory; only the web stays in
-        // the contentView. Touching .view loads the flipped container first.
-        chromeVC.layoutAttribute = .bottom
-        let chrome = chromeVC.view as! BrowserChromeView
-        chrome.translatesAutoresizingMaskIntoConstraints = false
-        chromeHeightConstraint = chrome.heightAnchor.constraint(equalToConstant: chromeHeight)
-        chromeHeightConstraint?.isActive = true
+        root.addSubview(chromeBackground)
 
         tabScrollView.documentView = tabStrip
-        chrome.addSubview(chromeBackground)
-        chrome.addSubview(toolbarRow)
-        chrome.addSubview(tabScrollView)
-        chrome.addSubview(progressBar)
-        chrome.addSubview(findRow)
-        chrome.addSubview(hairline)
+        root.addSubview(tabScrollView)
+        root.addSubview(toolbarRow)
+        root.addSubview(progressBar)
+        root.addSubview(findRow)
+        root.addSubview(hairline)
         root.addSubview(webContainer)
-
-        window?.addTitlebarAccessoryViewController(chromeVC)
 
         tabStrip.delegate = self
         progressBar.active = false
@@ -239,34 +203,26 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
               backButton != nil, forwardButton != nil, reloadButton != nil,
               bookmarkButton != nil, shieldButton != nil else { return }
         let b = root.bounds
-        // Safari's stacking, now in the accessory's own coordinates: toolbar on top,
-        // tab strip beneath it, progress pinned to the chrome's bottom edge.
-        let toolRow = toolbarRowHeight
-        let tabRow = tabRowHeight
-        // The traffic lights live in the native titlebar now, so the toolbar only
-        // keeps Safari's empty sidebar slot at the leading edge.
+        // Safari's stacking: the toolbar is the top row and the traffic lights sit over it,
+        // with the tab strip running the full width beneath.
+        let trafficLightInset: CGFloat = 82
         let sidebarSlot: CGFloat = 30   // empty slot where Safari's sidebar toggle would be
-        let leadingInset: CGFloat = 12
+        let tabRow: CGFloat = 36
+        let toolRow: CGFloat = 40
 
         toolbarRow.frame = NSRect(x: 0, y: 0, width: b.width, height: toolRow)
         tabScrollView.frame = NSRect(x: 0, y: toolRow, width: b.width, height: tabRow)
-        progressBar.frame = NSRect(x: 0, y: chromeHeight - 3, width: b.width, height: 3)
+        progressBar.frame = NSRect(x: 0, y: chromeTopHeight - 3, width: b.width, height: 3)
 
-        findRow.frame = NSRect(x: 0, y: chromeHeight, width: b.width, height: findRowHeight)
+        findRow.frame = NSRect(x: 0, y: chromeTopHeight, width: b.width, height: findRowHeight)
         findRow.isHidden = !findVisible
 
-        let chromeBottom = chromeHeight + findRowHeight
+        let chromeBottom = chromeTopHeight + findRowHeight
         chromeBackground.frame = NSRect(x: 0, y: 0, width: b.width, height: chromeBottom)
         hairline.frame = NSRect(x: 0, y: chromeBottom - 1, width: b.width, height: 1)
-        // The height constraint is what the window reads: it re-lays-out the
-        // accessory, re-derives contentLayoutRect, and only then do we place web.
-        chromeHeightConstraint?.constant = chromeBottom
-        win.layoutIfNeeded()
 
-        // The web fills exactly the unobscured content region. AppKit shrinks this
-        // rect around the accessory while it is shown and restores it when the
-        // accessory hides, so no gap is ever left behind.
-        webContainer.frame = root.convert(win.contentLayoutRect, from: nil)
+        webContainer.frame = NSRect(x: 0, y: chromeBottom, width: b.width,
+                                    height: max(0, b.height - chromeBottom))
         startView.frame = webContainer.bounds
         activeTab?.webView?.frame = webContainer.bounds
 
@@ -275,7 +231,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let bw: CGFloat = 30, bh: CGFloat = 28
         let y = (toolRow - bh) / 2
         // Left cluster: clears the traffic lights, then leaves Safari's sidebar slot empty.
-        let leftStart = leadingInset + sidebarSlot
+        let leftStart = trafficLightInset + sidebarSlot
         backButton.frame = NSRect(x: leftStart, y: y, width: bw, height: bh)
         forwardButton.frame = NSRect(x: leftStart + bw + 2, y: y, width: bw, height: bh)
 
@@ -325,12 +281,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         guard isChromeReady, let win = window, notification.object as? NSWindow === win else { return }
         layoutChrome()
     }
-
-    // Full-screen transitions change the accessory's presentation (hidden vs.
-    // shown), which changes contentLayoutRect without necessarily resizing the
-    // window — re-lay-out explicitly on the existing delegate path.
-    func windowDidEnterFullScreen(_ notification: Notification) { layoutChrome() }
-    func windowDidExitFullScreen(_ notification: Notification) { layoutChrome() }
 
     func windowDidBecomeKey(_ notification: Notification) {
         activeTab?.lastActive = Date()
@@ -452,20 +402,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func focusURLField() {
-        revealChromeForKeyboard()
         window?.makeFirstResponder(urlField)
-    }
-
-    /// Full-screen keyboard reveal for Cmd+L / Cmd+T / Cmd+F. In full screen
-    /// AppKit hides the titlebar accessory with the menu bar; focusing one of
-    /// its controls is the native request for AppKit to present the fullscreen
-    /// titlebar overlay — the same reveal a top-edge hover performs — so the
-    /// control the caller focuses below lands visibly instead of invisibly.
-    /// No-op in windowed mode, where the chrome is always shown.
-    private func revealChromeForKeyboard() {
-        guard let win = window, win.styleMask.contains(.fullScreen) else { return }
-        win.makeKeyAndOrderFront(nil)
-        win.layoutIfNeeded()
     }
 
     // MARK: - Chrome refresh
@@ -604,7 +541,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     @objc func showFindBar() {
         findVisible = true
-        revealChromeForKeyboard()
         layoutChrome()
         window?.makeFirstResponder(findField)
     }
