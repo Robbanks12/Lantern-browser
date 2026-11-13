@@ -288,6 +288,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // A drag in flight must not outlive its window: kill the auto-scroll
+        // timer and drop all retained drag state on the existing teardown path.
+        tabStrip.cancelDrag()
         saveSessionNow()
         NotificationCenter.default.removeObserver(self)
         hibernationTimer?.invalidate()

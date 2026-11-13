@@ -249,6 +249,13 @@ final class TabStripView: NSView {
     /// The view being dragged, tracked by identity. Indices go stale the moment a
     /// reorder runs; the object does not.
     private weak var draggedItem: TabItemView?
+    /// The dragged tab's model identity (`Tab.id`). Re-verified against the model
+    /// on every update: if the tab is gone, the drag ends instead of tracking a
+    /// recycled slot.
+    private var draggedTabID: UUID?
+    /// Model order parallel to `items`; the controller moves `tabs` and `items`
+    /// together, so `tabIDs[i]` is the identity of `items[i]`.
+    private var tabIDs: [UUID] = []
     /// Pointer in window coordinates, refreshed on every drag event and tick, so the
     /// auto-scroll timer can keep working while the pointer sits still.
     private var lastDragWindowPoint = NSPoint.zero
@@ -268,6 +275,10 @@ final class TabStripView: NSView {
     /// Rebuild only when the tab count changes; otherwise update in place so
     /// typing in a page title does not churn the view hierarchy.
     func update(tabs: [Tab], selected: Int) {
+        tabIDs = tabs.map { $0.id }
+        // The dragged tab was closed or replaced: end the drag rather than track
+        // whatever now sits in its slot.
+        if let id = draggedTabID, !tabIDs.contains(id) { endDrag() }
         if items.count != tabs.count {
             // The views below are replaced, so a drag in flight has no view left to
             // track and must not keep an index into the old array.
@@ -308,19 +319,18 @@ final class TabStripView: NSView {
         if draggedItem == nil { ensureSelectedVisible() }
     }
 
-    /// Every tab reads at a glance: the selected tab keeps its full 210pt until
-    /// the viewport itself is narrower, and the rest share the remainder down to
-    /// a 48pt favicon-only floor. Anything beyond that overflows into a scroll
-    /// instead of compressing the row.
+    /// Strict active-first sizing. The selected tab is ALWAYS exactly 210pt —
+    /// never conditional on tab count or viewport width. Inactive tabs share the
+    /// remainder down to a 48pt floor; anything beyond that overflows into the
+    /// scroll view instead of compressing the row.
     private let maxTabWidth: CGFloat = 210
     private let minInactiveTabWidth: CGFloat = 48
 
-    /// The visible width of the strip. Read from the enclosing scroll view's
-    /// viewport — never from this view's own bounds, which once scrolled span
-    /// the whole document.
+    /// The visible width of the strip's viewport. Read from the enclosing scroll
+    /// view's content size — never from this view's own bounds, which once
+    /// scrolled span the whole document, and never from the window width.
     private func viewportWidth() -> CGFloat {
-        let viewport = enclosingScrollView?.contentSize.width ?? bounds.width
-        return max(0, viewport - 6)
+        max(0, enclosingScrollView?.contentSize.width ?? bounds.width)
     }
 
     /// One width per item, in `items` order. The selected tab is found by its flag
@@ -328,12 +338,13 @@ final class TabStripView: NSView {
     private func tabWidths() -> [CGFloat] {
         let n = items.count
         guard n > 0 else { return [] }
+        if n == 1 { return [maxTabWidth] }
         let available = viewportWidth()
         let selected = items.firstIndex(where: { $0.isSelected }) ?? 0
-        let active = min(maxTabWidth, available)
-        let inactive = min(maxTabWidth, max(minInactiveTabWidth,
-                                           (available - active) / CGFloat(max(1, n - 1))))
-        return items.indices.map { $0 == selected ? active : inactive }
+        let activeWidth = maxTabWidth
+        let inactiveWidth = min(maxTabWidth, max(minInactiveTabWidth,
+                                                (available - activeWidth) / CGFloat(n - 1)))
+        return items.indices.map { $0 == selected ? activeWidth : inactiveWidth }
     }
 
     /// Called by the enclosing scroll view whenever the viewport changes size.
@@ -389,6 +400,7 @@ final class TabStripView: NSView {
         guard items.indices.contains(index) else { return }
         dragIndex = index
         draggedItem = items[index]
+        draggedTabID = tabIDs.indices.contains(index) ? tabIDs[index] : nil
         dragGrabX = grabX
         dragPointerX = items[index].frame.minX + grabX
         addSubview(items[index])          // raise above its neighbours while moving
@@ -445,8 +457,12 @@ final class TabStripView: NSView {
         invalidateDragScrollTimer()
         dragIndex = nil
         draggedItem = nil
+        draggedTabID = nil
         layoutTabs()
     }
+
+    /// Window-teardown entry point: safe to call whether or not a drag is active.
+    func cancelDrag() { endDrag() }
 
     deinit { invalidateDragScrollTimer() }
 
