@@ -1,15 +1,13 @@
 import AppKit
-import QuartzCore
 import WebKit
 
-final class FlippedView: NSView {
+class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
-/// Holds the whole browser chrome — toolbar, tab strip, progress bar, find row,
-/// background and hairline — as one unit inside the content root. Flipped, so the
-/// rows keep their top-down frames while the full-screen controller slides the
-/// single container instead of every subview.
+/// One view holds the toolbar, tab strip and find row. Windowed, it overlays the
+/// transparent titlebar inside `root`. In native full screen the same view becomes
+/// the view of a titlebar accessory, so AppKit moves it with the menu bar.
 final class BrowserChromeView: NSView {
     override var isFlipped: Bool { true }
 }
@@ -21,12 +19,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     let isPrivateWindow: Bool
 
     private let root = FlippedView()
-    /// Chrome container: a sibling of webContainer, always above it in z-order.
-    private let chromeView = BrowserChromeView()
-    private var fullScreenChrome: FullScreenChromeController?
     private let tabStrip = TabStripView()
-    /// Viewport for the tab strip. The strip itself is the document view and sizes
-    /// to its row of tabs, so an overflowing row scrolls instead of compressing.
     private let tabScrollView = TabStripScrollView()
     private let toolbarRow = FlippedView()
     private let progressBar = ProgressBar()
@@ -35,6 +28,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private let chromeBackground = NSVisualEffectView()
     private let hairline = HairlineView()
+    /// The custom chrome overlays the transparent native titlebar in a single row.
+    private let chromeHost = BrowserChromeView()
+
+    // MARK: Full-screen state
+    /// Non-nil exactly while the window is in native full screen. Then `chromeHost` is
+    /// the accessory's view and lives in AppKit's titlebar window, not in `root`.
+    private var fullScreenAccessory: NSTitlebarAccessoryViewController?
+    private var isEditingURL = false
+
+    // Fullscreen custom traffic lights
+    private var fullscreenTrafficLights: [NSButton] = []
+    private var nativeTrafficLightStates: [(type: NSWindow.ButtonType, wasHidden: Bool)] = []
 
     private var backButton: ToolbarButton!
     private var forwardButton: ToolbarButton!
@@ -61,19 +66,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var sessionSaveScheduled = false
     private var suppressCompletion = false
     private var statusResetWork: DispatchWorkItem?
-    /// Most recently closed tabs, for Reopen Closed Tab.
     private var closedTabs: [SavedTab] = []
 
-    /// One source of truth for chrome geometry. The old 36 + 38 constant (74)
-    /// never matched the actual rows (40 + 36 = 76); these do.
     private let toolbarRowHeight: CGFloat = 40
     private let tabRowHeight: CGFloat = 36
     private var chromeHeight: CGFloat { toolbarRowHeight + tabRowHeight }
     private var findRowHeight: CGFloat { findVisible ? 34 : 0 }
-    /// What the chrome occupies, including the find row: 76 normally, 110 with it.
-    private var totalChromeHeight: CGFloat { chromeHeight + findRowHeight }
-    /// Set once buildChrome() has created every control. layoutChrome() is a no-op before
-    /// that, because the window can post a resize while it is still being constructed.
     private var isChromeReady = false
 
     var activeTab: Tab? { tabs.indices.contains(activeIndex) ? tabs[activeIndex] : nil }
@@ -83,7 +81,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     init(isPrivate: Bool = false) {
         self.isPrivateWindow = isPrivate
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
-                         styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                         styleMask: [.titled, .closable, .miniaturizable, .resizable,
+                                     .fullSizeContentView],
                          backing: .buffered, defer: false)
         super.init(window: w)
 
@@ -92,34 +91,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         w.titlebarAppearsTransparent = true
         w.isMovableByWindowBackground = true
         w.minSize = NSSize(width: 520, height: 380)
-        w.tabbingMode = .disallowed          // we manage our own tabs
+        w.tabbingMode = .disallowed
         w.setFrameAutosaveName(isPrivate ? "LanternPrivateWindow" : "LanternWindow")
         w.backgroundColor = .windowBackgroundColor
         if #available(macOS 11.0, *) { w.titlebarSeparatorStyle = .none }
 
-        // An empty toolbar gives the full-screen machinery something to collapse:
-        // with no NSToolbar, macOS keeps the native titlebar (traffic lights) as a
-        // permanent extra row in full screen. Empty, separator-less and without
-        // items it adds no height, so windowed mode is pixel-identical; in full
-        // screen it auto-hides with the menu bar and reveals with it on hover.
-        let toolbar = NSToolbar(identifier: "LanternToolbar")
-        toolbar.showsBaselineSeparator = false
-        w.toolbar = toolbar
-
         buildChrome()
         w.contentView = root
 
-        // Order matters: setFrameAutosaveName above restores the saved frame synchronously
-        // and posts windowDidResize. Registering the delegate only now, and laying out
-        // explicitly once the controls exist, keeps layoutChrome() away from nil controls.
         isChromeReady = true
         w.delegate = self
-
-        // Full-screen chrome behaviour lives in its own controller; it only needs
-        // the two views and the callbacks below.
-        fullScreenChrome = FullScreenChromeController(window: w, root: root,
-                                                      chrome: chromeView, web: webContainer,
-                                                      host: self)
         layoutChrome()
 
         startHibernationTimer()
@@ -128,7 +109,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
         Downloads.shared.statusHandler = { [weak self] msg in self?.showStatus(msg) }
 
-        // No polling: the indicator follows WebKit's download callbacks and KVO.
         NotificationCenter.default.addObserver(self, selector: #selector(downloadsDidChange),
                                                name: .downloadsDidChange, object: Downloads.shared)
         updateDownloadIndicator()
@@ -141,33 +121,24 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Chrome
 
     private func buildChrome() {
-        // One vibrant layer behind the whole chrome gives the standard native toolbar
-        // look for the cost of a single layer.
-        // Web first, chrome second: both are siblings in the content root, and the
-        // chrome must draw over the page whenever their frames overlap (the
-        // full-screen reveal slides it down over the web content).
-        root.addSubview(webContainer)
-        root.addSubview(chromeView)
-
         chromeBackground.material = .titlebar
         chromeBackground.blendingMode = .withinWindow
         chromeBackground.state = .followsWindowActiveState
-        // Its own layer keeps the full-screen slide to one composited frame instead
-        // of a redraw of every row on each step.
-        chromeView.wantsLayer = true
-        chromeView.addSubview(chromeBackground)
 
         tabScrollView.documentView = tabStrip
-        chromeView.addSubview(tabScrollView)
-        chromeView.addSubview(toolbarRow)
-        chromeView.addSubview(progressBar)
-        chromeView.addSubview(findRow)
-        chromeView.addSubview(hairline)
+        root.addSubview(webContainer)
+        root.addSubview(chromeHost)
+        chromeHost.addSubview(chromeBackground)
+        chromeHost.addSubview(toolbarRow)
+        chromeHost.addSubview(tabScrollView)
+        chromeHost.addSubview(progressBar)
+        chromeHost.addSubview(findRow)
+        chromeHost.addSubview(hairline)
 
         tabStrip.delegate = self
         progressBar.active = false
         findRow.isHidden = true
-        downloadIndicator.isHidden = true    // shown by updateDownloadIndicator()
+        downloadIndicator.isHidden = true
 
         backButton = ToolbarButton(symbol: "chevron.backward", tip: "Back (\u{2318}[)",
                                    target: self, action: #selector(goBack))
@@ -182,7 +153,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                                      tip: "Ad & tracker blocking",
                                      target: self, action: #selector(toggleBlocking))
 
-        // The new-tab `+` moved here from the tab strip: same control, same glyph, same tip.
         plusButton.bezelStyle = .accessoryBarAction
         plusButton.isBordered = false
         plusButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")
@@ -204,7 +174,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         [backButton, forwardButton, urlBar, reloadButton, bookmarkButton,
          shieldButton, statusPill, downloadIndicator, plusButton].forEach { toolbarRow.addSubview($0!) }
 
-        // Find bar
         findField.placeholderString = "Find on page"
         findField.font = .systemFont(ofSize: 12)
         findField.bezelStyle = .roundedBezel
@@ -234,85 +203,71 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     override func windowDidLoad() { super.windowDidLoad() }
 
-    private func layoutChrome(animated: Bool = false, completion: (() -> Void)? = nil) {
-        // Resizes arrive while the window is still being built (the autosaved frame is
-        // restored inside init) or before it has a usable size. Nothing to lay out then,
-        // and the controls below are implicitly unwrapped, so check them explicitly.
+    private func layoutChrome() {
         guard isChromeReady,
               let win = window, win.frame.width > 0, win.frame.height > 0,
               root.bounds.width > 0,
               backButton != nil, forwardButton != nil, reloadButton != nil,
-              bookmarkButton != nil, shieldButton != nil else {
-            completion?()
-            return
-        }
+              bookmarkButton != nil, shieldButton != nil else { return }
+        
         let b = root.bounds
-        // Safari's stacking: the toolbar is the top row and the traffic lights sit over it,
-        // with the tab strip running the full width beneath.
-        let trafficLightInset: CGFloat = 82
-        let sidebarSlot: CGFloat = 30   // empty slot where Safari's sidebar toggle would be
         let toolRow = toolbarRowHeight
         let tabRow = tabRowHeight
+        let visibleChromeHeight = chromeHeight + findRowHeight
+        let inTitlebar = fullScreenAccessory != nil
+        let toolbarWidth: CGFloat
+        let tabsWidth: CGFloat
 
-        // The chrome moves as one unit. In full screen the controller decides the
-        // vertical offset: 0 while shown, -height while hidden. Everything else —
-        // the rows, the web frame — is derived from that one number.
-        let offset = fullScreenChrome?.chromeOffset ?? 0
-        let chromeBottom = totalChromeHeight
-        let chromeFrame = NSRect(x: 0, y: offset, width: b.width, height: chromeBottom)
-        let webTop = max(0, offset + chromeBottom)
-        let webFrame = NSRect(x: 0, y: webTop, width: b.width,
-                              height: max(0, b.height - webTop))
+        if inTitlebar {
+            resizeFullScreenAccessory(to: visibleChromeHeight)
+            let hostWidth = chromeHost.bounds.width
+            toolbarWidth = hostWidth > 0 ? hostWidth : b.width
+        } else {
+            chromeHost.isHidden = false
+            chromeHost.frame = NSRect(x: b.minX, y: b.minY,
+                                      width: b.width, height: visibleChromeHeight)
+            toolbarWidth = b.width
+        }
+        tabsWidth = toolbarWidth
 
-        toolbarRow.frame = NSRect(x: 0, y: 0, width: b.width, height: toolRow)
-        tabScrollView.frame = NSRect(x: 0, y: toolRow, width: b.width, height: tabRow)
-        progressBar.frame = NSRect(x: 0, y: chromeHeight - 3, width: b.width, height: 3)
-
-        findRow.frame = NSRect(x: 0, y: chromeHeight, width: b.width, height: findRowHeight)
+        toolbarRow.frame = NSRect(x: 0, y: 0, width: toolbarWidth, height: toolRow)
+        tabScrollView.frame = NSRect(x: 0, y: toolRow, width: tabsWidth, height: tabRow)
+        progressBar.frame = NSRect(x: 0, y: chromeHeight - 3, width: tabsWidth, height: 3)
+        findRow.frame = NSRect(x: 0, y: chromeHeight, width: tabsWidth, height: findRowHeight)
         findRow.isHidden = !findVisible
 
-        chromeBackground.frame = NSRect(x: 0, y: 0, width: b.width, height: chromeBottom)
-        hairline.frame = NSRect(x: 0, y: chromeBottom - 1, width: b.width, height: 1)
+        chromeBackground.frame = NSRect(x: 0, y: 0, width: tabsWidth, height: visibleChromeHeight)
+        hairline.frame = NSRect(x: 0, y: visibleChromeHeight - 1, width: tabsWidth, height: 1)
 
-        if animated {
-            // Slide the chrome and let the web follow, so no gap is ever exposed.
-            // Hiding: the web takes its full frame first — it sits behind the chrome,
-            // so nothing visible jumps and the page is already underneath as the
-            // chrome leaves. Revealing: the web keeps the full frame until the chrome
-            // has arrived, then settles beneath it; that shrink happens under the
-            // chrome, where it cannot be seen.
-            if webTop == 0 { webContainer.frame = webFrame }
-            NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = FullScreenChromeController.slideDuration
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                chromeView.animator().frame = chromeFrame
-            }, completionHandler: { [weak self] in
-                guard let self else { return }
-                self.webContainer.frame = webFrame
-                self.startView.frame = self.webContainer.bounds
-                self.activeTab?.webView?.frame = self.webContainer.bounds
-                completion?()
-            })
+        if inTitlebar {
+            webContainer.frame = b
         } else {
-            chromeView.frame = chromeFrame
-            webContainer.frame = webFrame
-            startView.frame = webContainer.bounds
-            activeTab?.webView?.frame = webContainer.bounds
-            completion?()
+            webContainer.frame = NSRect(x: b.minX, y: b.minY + visibleChromeHeight,
+                                        width: b.width,
+                                        height: max(0, b.height - visibleChromeHeight))
         }
-        fullScreenChrome?.layoutDidChange()
+        startView.frame = webContainer.bounds
+        activeTab?.webView?.frame = webContainer.bounds
 
-        // Toolbar row internals. Buttons get a 30x28 hit area so the hover highlight
-        // reads as a real target rather than a tight box around the glyph.
         let bw: CGFloat = 30, bh: CGFloat = 28
         let y = (toolRow - bh) / 2
-        // Left cluster: clears the traffic lights, then leaves Safari's sidebar slot empty.
-        let leftStart = trafficLightInset + sidebarSlot
+        
+        // In fullscreen, the native traffic lights are hidden and replaced by our custom ones in toolbarRow
+        let leftStart: CGFloat
+        if inTitlebar {
+            leftStart = fullscreenTrafficLights.map(\.frame.maxX).max().map { $0 + 10 } ?? 78
+        } else {
+            let lightsRight = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+                .compactMap { win.standardWindowButton($0) }
+                .map { root.convert($0.bounds, from: $0).maxX }
+                .max() ?? 70
+            leftStart = lightsRight + 10
+        }
+        
         backButton.frame = NSRect(x: leftStart, y: y, width: bw, height: bh)
         forwardButton.frame = NSRect(x: leftStart + bw + 2, y: y, width: bw, height: bh)
 
-        // Right cluster, filled from the trailing edge: + , pill, shield, bookmark, reload.
-        var right = b.width - 12
+        var right = toolbarWidth - 12
         plusButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
         right -= bw + 2
         if Settings.shared.showMemoryPill(jsonValue: Config.shared.showMemoryReadout) {
@@ -324,10 +279,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             statusPill.isHidden = true
         }
 
-        // Takes toolbar space only while something is downloading.
         if !downloadIndicator.isHidden {
-            downloadIndicator.frame = NSRect(x: right - 22, y: (toolRow - 22) / 2,
-                                             width: 22, height: 22)
+            downloadIndicator.frame = NSRect(x: right - 22, y: (toolRow - 22) / 2, width: 22, height: 22)
             right -= 22 + 2
         }
         shieldButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
@@ -337,19 +290,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         reloadButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
         right -= bw + 10
 
-        // Address field flexes between the clusters, with an equal margin on each side.
         let urlX = forwardButton.frame.maxX + 10
         let fieldH: CGFloat = 28
         urlBar.frame = NSRect(x: urlX, y: (toolRow - fieldH) / 2,
                               width: max(90, right - urlX), height: fieldH)
 
-        // Find row internals
         if findVisible {
             findField.frame = NSRect(x: 14, y: 5, width: 250, height: 24)
             findPrevButton.frame = NSRect(x: 272, y: 5, width: 26, height: 24)
             findNextButton.frame = NSRect(x: 300, y: 5, width: 26, height: 24)
             findCount.frame = NSRect(x: 334, y: 9, width: 200, height: 16)
-            findDoneButton.frame = NSRect(x: b.width - 78, y: 5, width: 64, height: 24)
+            findDoneButton.frame = NSRect(x: tabsWidth - 78, y: 5, width: 64, height: 24)
         }
     }
 
@@ -358,36 +309,154 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         layoutChrome()
     }
 
-    // Full-screen transitions are the only moment the chrome's visibility policy
-    // changes; the controller owns everything from there.
+    // MARK: - Full screen
+
     func windowDidEnterFullScreen(_ notification: Notification) {
-        guard let win = window, notification.object as? NSWindow === win else { return }
-        fullScreenChrome?.windowDidEnterFullScreen()
+        installFullScreenAccessory()
+    }
+
+    func windowWillExitFullScreen(_ notification: Notification) {
+        removeFullScreenAccessory()
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {
-        guard let win = window, notification.object as? NSWindow === win else { return }
-        fullScreenChrome?.windowDidExitFullScreen()
+        removeFullScreenAccessory()
     }
 
-    /// Full-screen presentation: hide the (empty) toolbar and the menu bar with
-    /// the content, and bring them back together on a top-edge hover — the same
-    /// hover that fires our reveal band, so both appear simultaneously. The union
-    /// preserves whatever the system proposed (fullScreen, dock handling).
-    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions) -> NSApplication.PresentationOptions {
-        proposedOptions.union([.autoHideToolbar, .autoHideMenuBar])
+    func windowDidFailToExitFullScreen(_ window: NSWindow) {
+        installFullScreenAccessory()
     }
 
+    func window(_ window: NSWindow,
+                willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions)
+        -> NSApplication.PresentationOptions {
+        [.fullScreen, .autoHideMenuBar, .autoHideToolbar]
+    }
+
+    private func installFullScreenAccessory() {
+        guard fullScreenAccessory == nil, let win = window else { return }
+
+        // 1. Hide native traffic lights and draw custom ones
+        installFullscreenTrafficLights(in: win)
+
+        // 2. Setup accessory
+        chromeHost.removeFromSuperview()
+        chromeHost.frame = NSRect(x: 0, y: 0, width: root.bounds.width,
+                                  height: chromeHeight + findRowHeight)
+
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.layoutAttribute = .bottom
+        accessory.fullScreenMinHeight = 0
+        accessory.view = chromeHost
+        fullScreenAccessory = accessory
+
+        // 3. Keep titlebar transparent to match windowed mode (Fixes dark theme/outlines)
+        win.titlebarAppearsTransparent = true
+        chromeBackground.isHidden = false // Ensure background is visible
+        
+        win.addTitlebarAccessoryViewController(accessory)
+
+        chromeHost.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(chromeHostFrameDidChange),
+                                               name: NSView.frameDidChangeNotification,
+                                               object: chromeHost)
+        layoutChrome()
+    }
+
+    private func removeFullScreenAccessory() {
+        guard let accessory = fullScreenAccessory, let win = window else { return }
+
+        NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification,
+                                                  object: chromeHost)
+        chromeHost.postsFrameChangedNotifications = false
+        fullScreenAccessory = nil
+
+        if let index = win.titlebarAccessoryViewControllers.firstIndex(where: { $0 === accessory }) {
+            win.removeTitlebarAccessoryViewController(at: index)
+        }
+        chromeHost.removeFromSuperview()
+        root.addSubview(chromeHost)
+        
+        // Restore native traffic lights
+        restoreNativeTrafficLights(in: win)
+        
+        win.titlebarAppearsTransparent = true
+        layoutChrome()
+    }
+
+    @objc private func chromeHostFrameDidChange(_ notification: Notification) {
+        guard fullScreenAccessory != nil,
+              abs(chromeHost.bounds.width - toolbarRow.frame.width) > 0.5 else { return }
+        layoutChrome()
+    }
+
+    private func resizeFullScreenAccessory(to height: CGFloat) {
+        guard fullScreenAccessory != nil else { return }
+        if abs(chromeHost.frame.height - height) > 0.5 {
+            chromeHost.setFrameSize(NSSize(width: chromeHost.frame.width, height: height))
+        }
+        updateChromePin()
+    }
+
+    private func updateChromePin() {
+        guard let accessory = fullScreenAccessory else { return }
+        let minHeight: CGFloat = (isEditingURL || findVisible) ? chromeHost.frame.height : 0
+        if accessory.fullScreenMinHeight != minHeight { accessory.fullScreenMinHeight = minHeight }
+    }
+
+    // MARK: - Traffic Light Helpers
+    private func installFullscreenTrafficLights(in window: NSWindow) {
+        removeFullscreenTrafficLights()
+        
+        let buttonTypes: [(NSWindow.ButtonType, Selector)] = [
+            (.closeButton, #selector(NSWindow.performClose(_:))),
+            (.miniaturizeButton, #selector(NSWindow.performMiniaturize(_:))),
+            (.zoomButton, #selector(NSWindow.toggleFullScreen(_:)))
+        ]
+
+        nativeTrafficLightStates = buttonTypes.compactMap { type, _ in
+            guard let button = window.standardWindowButton(type) else { return nil }
+            return (type, button.isHidden)
+        }
+
+        let rowHeight = toolbarRow.bounds.height > 0 ? toolbarRow.bounds.height : 40
+        var x: CGFloat = 9
+        
+        for (type, action) in buttonTypes {
+            guard let button = NSWindow.standardWindowButton(type, for: window.styleMask) else { continue }
+            button.target = window
+            button.action = action
+            button.isHidden = true // Hide native
+
+            let size = button.frame.size
+            button.frame = NSRect(x: x, y: (rowHeight - size.height) / 2, width: size.width, height: size.height)
+            toolbarRow.addSubview(button)
+            fullscreenTrafficLights.append(button)
+            x += size.width + 9
+        }
+    }
+
+    private func removeFullscreenTrafficLights() {
+        fullscreenTrafficLights.forEach { $0.removeFromSuperview() }
+        fullscreenTrafficLights.removeAll(keepingCapacity: true)
+    }
+
+    private func restoreNativeTrafficLights(in window: NSWindow) {
+        nativeTrafficLightStates.forEach {
+            window.standardWindowButton($0.type)?.isHidden = $0.wasHidden
+        }
+        nativeTrafficLightStates.removeAll(keepingCapacity: true)
+        removeFullscreenTrafficLights()
+    }
+
+    // MARK: - Remaining Original Code
     func windowDidBecomeKey(_ notification: Notification) {
         activeTab?.lastActive = Date()
         Downloads.shared.statusHandler = { [weak self] msg in self?.showStatus(msg) }
     }
 
     func windowWillClose(_ notification: Notification) {
-        // A drag in flight must not outlive its window: kill the auto-scroll
-        // timer and drop all retained drag state on the existing teardown path.
         tabStrip.cancelDrag()
-        fullScreenChrome?.detach()
         saveSessionNow()
         NotificationCenter.default.removeObserver(self)
         hibernationTimer?.invalidate()
@@ -396,13 +465,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         AppDelegate.shared?.windowClosed(self)
     }
 
-    // MARK: - Tabs
-
     @discardableResult
     func newTab(url: URL? = nil, activate: Bool = true, configuration: WKWebViewConfiguration? = nil) -> Tab {
         let tab = Tab(url: url, isPrivate: isPrivateWindow, delegate: self, configuration: configuration)
         tabs.append(tab)
-        // An opener-created tab must have its web view before we return it to WebKit.
         if configuration != nil { tab.ensureLoaded() }
         if activate {
             activeIndex = tabs.count - 1
@@ -462,7 +528,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func closeActiveTab() { closeTab(index: activeIndex) }
 
-    /// Restores the last closed tab with its history and scroll position intact.
     @objc func reopenClosedTab() {
         guard let saved = closedTabs.popLast() else {
             showStatus("No recently closed tabs")
@@ -476,7 +541,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         scheduleSessionSave()
     }
 
-    /// Swap the visible web view. Waking a hibernated tab happens here.
     private func attachActiveTab() {
         webContainer.subviews.forEach { $0.removeFromSuperview() }
         guard let tab = activeTab else { return }
@@ -495,21 +559,30 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func focusWebContent() {
-        if let wv = activeTab?.webView { window?.makeFirstResponder(wv) }
+        guard let wv = activeTab?.webView else { return }
+        window?.makeFirstResponder(wv)
+        if fullScreenAccessory != nil { window?.makeKey() }
     }
 
     func focusURLField() {
-        // Cmd+L / Cmd+T: the field lives in the chrome, so it has to be on screen
-        // before it takes focus.
-        fullScreenChrome?.revealForKeyboard()
-        window?.makeFirstResponder(urlField)
+        setURLEditing(true)
+        if !focus(urlField) { setURLEditing(false) }
     }
 
-    // MARK: - Chrome refresh
+    private func setURLEditing(_ editing: Bool) {
+        isEditingURL = editing
+        updateChromePin()
+    }
+
+    @discardableResult
+    private func focus(_ field: NSTextField) -> Bool {
+        guard let host = field.window else { return false }
+        if !host.isKeyWindow { host.makeKey() }
+        return host.makeFirstResponder(field)
+    }
 
     @objc private func newTabFromToolbar() { newTab() }
 
-    /// Re-applies the settings owned by the Settings window. Called for every open window.
     func applySettings() {
         startMemoryReadout()
         layoutChrome()
@@ -532,7 +605,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         tabStrip.update(tabs: tabs, selected: activeIndex)
 
         guard let tab = activeTab else { return }
-        // ToolbarButton handles its own enabled/disabled tinting.
         backButton.isEnabled = tab.canGoBack
         forwardButton.isEnabled = tab.canGoForward
 
@@ -541,7 +613,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         progressBar.active = tab.isLoading && tab.progress < 1
         progressBar.progress = tab.progress
 
-        if window?.firstResponder !== urlField.currentEditor() {
+        if urlField.window?.firstResponder !== urlField.currentEditor() {
             let text = tab.url.map { u -> String in
                 let s = u.absoluteString
                 return s == "about:blank" ? "" : Store.displayForm(s)
@@ -564,8 +636,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
         window?.title = tab.displayTitle
     }
-
-    // MARK: - Actions
 
     @objc func goBack() { activeTab?.goBack() }
     @objc func goForward() { activeTab?.goForward() }
@@ -596,8 +666,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func reloadAllForRuleChange() {
-        // Content rules are baked into a configuration at creation time, so tabs must
-        // be rebuilt. Hibernating them does exactly that, for free.
         for (i, tab) in tabs.enumerated() where i != activeIndex { tab.hibernate() }
         if let tab = activeTab {
             tab.webView?.removeFromSuperview()
@@ -637,15 +705,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         showStatus("Zoom \(Int(wv.pageZoom * 100))%")
     }
 
-    // MARK: - Find
-
     @objc func showFindBar() {
-        // Set the height first, then reveal: the chrome slides in at the height it
-        // will actually occupy, find row included.
         findVisible = true
-        fullScreenChrome?.revealForKeyboard()
         layoutChrome()
-        window?.makeFirstResponder(findField)
+        focus(findField)
     }
 
     @objc func hideFindBar() {
@@ -669,8 +732,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    // MARK: - Hibernation
-
     private func startHibernationTimer() {
         hibernationTimer?.invalidate()
         guard Config.shared.hibernateAfterMinutes > 0 else { return }
@@ -691,7 +752,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    /// Menu action: put every background tab to sleep right now.
     @objc func hibernateBackgroundTabsNow() {
         var slept = 0
         for (i, tab) in tabs.enumerated() where i != activeIndex {
@@ -714,10 +774,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         memoryPressureSource = src
     }
 
-    // MARK: - Memory readout
-
     private func startMemoryReadout() {
-        // The Settings toggle calls this again, so never leave a second timer behind.
         memoryTimer?.invalidate()
         memoryTimer = nil
         guard Settings.shared.showMemoryPill(jsonValue: Config.shared.showMemoryReadout) else {
@@ -733,7 +790,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func updateMemoryReadout() {
-        guard statusResetWork == nil else { return }   // a transient message is showing
+        guard statusResetWork == nil else { return }
         let s = MemoryMonitor.sample()
         let sleeping = tabs.filter { $0.isHibernated }.count
         var text = s.display
@@ -754,8 +811,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         statusResetWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
     }
-
-    // MARK: - Session
 
     private func scheduleSessionSave() {
         guard !isPrivateWindow, !sessionSaveScheduled else { return }
@@ -817,7 +872,6 @@ extension BrowserWindowController: TabStripDelegate {
         guard tabs.indices.contains(from), tabs.indices.contains(to), from != to else { return }
         let moved = tabs.remove(at: from)
         tabs.insert(moved, at: to)
-        // Keep the selection on the same tab, not the same slot.
         if activeIndex == from {
             activeIndex = to
         } else if from < activeIndex, to >= activeIndex {
@@ -829,8 +883,6 @@ extension BrowserWindowController: TabStripDelegate {
         scheduleSessionSave()
     }
 
-    /// Handlers capture the Tab itself, not its index, so a menu left open while tabs
-    /// move around cannot act on the wrong one.
     func tabStripContextActions(index: Int) -> [(String, () -> Void)] {
         guard tabs.indices.contains(index) else { return [] }
         let tab = tabs[index]
@@ -853,7 +905,6 @@ extension BrowserWindowController: TabStripDelegate {
         if !tab.isHibernated {
             items.append(("Put Tab to Sleep", { [weak self] in
                 guard let self else { return }
-                // Never tear down the tab currently on screen.
                 if tab === self.activeTab { self.showStatus("Can\u{2019}t sleep the active tab"); return }
                 tab.hibernate()
                 self.refreshChrome()
@@ -885,11 +936,15 @@ extension BrowserWindowController: TabStripDelegate {
 
 extension BrowserWindowController: NSTextFieldDelegate {
     func controlTextDidBeginEditing(_ obj: Notification) {
-        if (obj.object as? NSTextField) === urlField { urlBar.setFocused(true) }
+        guard (obj.object as? NSTextField) === urlField else { return }
+        urlBar.setFocused(true)
+        setURLEditing(true)
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        if (obj.object as? NSTextField) === urlField { urlBar.setFocused(false) }
+        guard (obj.object as? NSTextField) === urlField else { return }
+        urlBar.setFocused(false)
+        setURLEditing(false)
     }
 
     func controlTextDidChange(_ obj: Notification) {
@@ -902,55 +957,7 @@ extension BrowserWindowController: NSTextFieldDelegate {
 
     func control(_ control: NSControl, textView: NSTextView, completions words: [String],
                  forPartialWordRange charRange: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>) -> [String] {
-        index.pointee = -1     // do not auto-insert; let the user arrow down
+        index.pointee = -1
         return Store.shared.suggestions(for: textView.string)
-    }
-}
-
-// MARK: - Full-screen chrome host
-
-extension BrowserWindowController: FullScreenChromeHost {
-    /// 76pt, or 110pt while the find row is up: the height that collapses away.
-    var chromeBarHeight: CGFloat { totalChromeHeight }
-
-    func applyChromeVisibility(animated: Bool, completion: (() -> Void)?) {
-        layoutChrome(animated: animated, completion: completion)
-    }
-
-    /// Anything the user is in the middle of keeps the chrome where it is, so a
-    /// focused field can never slide away mid-edit.
-    var isChromeInteractionPinned: Bool {
-        guard let win = window else { return true }
-        if tabStrip.isDraggingTab { return true }          // tab drag in flight
-        if NSEvent.pressedMouseButtons != 0 { return true } // press or drag anywhere
-        if win.attachedSheet != nil { return true }         // modal sheet open
-        if let responder = win.firstResponder {
-            if let field = (responder as? NSTextView)?.delegate as? NSTextField,
-               field === urlField || field === findField {
-                return true     // a chrome field's editor is first responder: editing
-            }
-            if let view = responder as? NSView, isDescendantOfChrome(view) { return true }
-        }
-        return false
-    }
-
-    /// Never strand keyboard focus in a chrome that is about to disappear.
-    func releaseChromeFocus() {
-        guard let responder = window?.firstResponder else { return }
-        if let field = (responder as? NSTextView)?.delegate as? NSTextField,
-           field === urlField || field === findField {
-            focusWebContent()
-            return
-        }
-        if let view = responder as? NSView, isDescendantOfChrome(view) { focusWebContent() }
-    }
-
-    private func isDescendantOfChrome(_ view: NSView) -> Bool {
-        var current: NSView? = view
-        while let v = current {
-            if v === chromeView { return true }
-            current = v.superview
-        }
-        return false
     }
 }
