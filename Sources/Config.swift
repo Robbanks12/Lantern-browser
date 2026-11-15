@@ -6,6 +6,9 @@ final class Config {
     static let shared = Config()
 
     var searchTemplate: String = "https://www.google.com/search?q=%s"
+    /// Stable engine id from the picker (default google). Empty means a
+    /// hand-written searchTemplate with no matching engine: it is used as-is.
+    var searchEngine: String = "google"
     var homepage: String = "about:blank"
     /// Minutes a background tab may sit before its web process is destroyed. 0 = never.
     var hibernateAfterMinutes: Double = 5
@@ -34,6 +37,16 @@ final class Config {
             return
         }
         if let v = d["searchTemplate"] as? String { searchTemplate = v }
+        if let v = d["searchEngine"] as? String {
+            searchEngine = v
+        } else if let known = SearchEngines.id(forTemplate: searchTemplate) {
+            // A hand-set template that names a known engine: adopt it so the
+            // picker reflects reality instead of silently overriding it.
+            searchEngine = known
+        } else if searchTemplate != (SearchEngines.template(for: SearchEngines.defaultEngineID) ?? "") {
+            // A hand-set template with no matching engine: keep using it.
+            searchEngine = ""
+        }
         if let v = d["homepage"] as? String { homepage = v }
         if let v = d["hibernateAfterMinutes"] as? Double { hibernateAfterMinutes = v }
         if let v = d["hibernateOnMemoryPressure"] as? Bool { hibernateOnMemoryPressure = v }
@@ -43,9 +56,18 @@ final class Config {
         if let v = d["enableDeveloperTools"] as? Bool { enableDeveloperTools = v }
     }
 
+    /// Called by the Settings picker. Keeps the legacy template in sync so older
+    /// builds (which only read searchTemplate) keep working, then persists.
+    func setSearchEngine(_ id: String) {
+        searchEngine = id
+        if let t = SearchEngines.template(for: id) { searchTemplate = t }
+        save()
+    }
+
     func save() {
         let d: [String: Any] = [
             "searchTemplate": searchTemplate,
+            "searchEngine": searchEngine,
             "homepage": homepage,
             "hibernateAfterMinutes": hibernateAfterMinutes,
             "hibernateOnMemoryPressure": hibernateOnMemoryPressure,
@@ -74,7 +96,6 @@ final class Config {
                 || s.range(of: #"^localhost(:\d+)?(/.*)?$"#, options: .regularExpression) != nil)
         if looksLikeHost { return URL(string: "https://" + s) }
 
-        let q = s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(.init(charactersIn: "-._~"))) ?? s
-        return URL(string: searchTemplate.replacingOccurrences(of: "%s", with: q))
+        return SearchEngines.buildSearchUrl(query: s)
     }
 }
