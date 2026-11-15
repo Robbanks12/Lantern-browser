@@ -64,6 +64,18 @@ final class Config {
         save()
     }
 
+    /// Homepage as a loadable URL, or nil for the native start page. Empty,
+    /// about:blank and unparseable values all mean the start page, so a fresh
+    /// install never spends a web process on a new tab.
+    var homepageURL: URL? {
+        let s = homepage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty, s.lowercased() != "about:blank",
+              let u = URL(string: s),
+              let scheme = u.scheme?.lowercased(),
+              scheme == "http" || scheme == "https", u.host != nil else { return nil }
+        return u
+    }
+
     func save() {
         let d: [String: Any] = [
             "searchTemplate": searchTemplate,

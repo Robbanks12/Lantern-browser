@@ -146,6 +146,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         controllers.forEach { $0.applySettings() }
     }
 
+    /// The Settings window calls this after the ad-blocking checkbox so every
+    /// open window reloads its tabs under the new rules at once.
+    func blockingSettingChanged() {
+        controllers.forEach { $0.applyBlockingSetting() }
+    }
+
     @objc func openBlocklist() {
         if let u = ContentBlocker.domainListURL() { NSWorkspace.shared.open(u) }
     }

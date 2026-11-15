@@ -467,13 +467,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     @discardableResult
     func newTab(url: URL? = nil, activate: Bool = true, configuration: WKWebViewConfiguration? = nil) -> Tab {
-        let tab = Tab(url: url, isPrivate: isPrivateWindow, delegate: self, configuration: configuration)
+        // A blank new tab opens the homepage when one is set, else the native start page.
+        let effectiveURL = url ?? Config.shared.homepageURL
+        let tab = Tab(url: effectiveURL, isPrivate: isPrivateWindow, delegate: self, configuration: configuration)
         tabs.append(tab)
         if configuration != nil { tab.ensureLoaded() }
         if activate {
             activeIndex = tabs.count - 1
             attachActiveTab()
-            if url == nil { focusURLField() }
+            if effectiveURL == nil { focusURLField() }
         }
         refreshChrome()
         scheduleSessionSave()
@@ -585,7 +587,19 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func applySettings() {
         startMemoryReadout()
+        startHibernationTimer()
+        applyMemoryPressureSetting()
         layoutChrome()
+    }
+
+    /// Starts or stops the memory-pressure watchdog to match the current setting.
+    private func applyMemoryPressureSetting() {
+        if Config.shared.hibernateOnMemoryPressure {
+            if memoryPressureSource == nil { installMemoryPressureHandling() }
+        } else {
+            memoryPressureSource?.cancel()
+            memoryPressureSource = nil
+        }
     }
 
     @objc private func downloadsDidChange() { updateDownloadIndicator() }
@@ -656,6 +670,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     @objc func toggleBlocking() {
         Config.shared.blockAdsAndTrackers.toggle()
         Config.shared.save()
+        applyBlockingSetting()
+    }
+
+    /// Re-applies the ad & tracker setting: used by the toolbar shield and the
+    /// Settings checkbox alike, so open tabs reload under the new rules at once.
+    func applyBlockingSetting() {
         if Config.shared.blockAdsAndTrackers {
             ContentBlocker.load { [weak self] _ in
                 self?.reloadAllForRuleChange()
