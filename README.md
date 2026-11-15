@@ -1,9 +1,12 @@
-# Lantern 🏮
+<div align="center">
+  <h1>Lantern 🏮</h1>
+  
+  <p>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" /></a>
+    <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform: macOS" />
+  </p>
 
-<p>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform: macOS" />
-</p>
+</div>
 
 > **Status: work in progress.** Lantern is currently a work in progress and is
 > trying to reach feature and UI parity+ with Safari. Expect rough edges, missing
