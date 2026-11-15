@@ -266,6 +266,14 @@ extension Tab: WKNavigationDelegate {
             decisionHandler(.cancel)
             return
         }
+        // An explicit download intent (download attribute, direct binary link)
+        // wins over everything below: opening a new tab for it would leave a
+        // blank tab behind, and allowing it would navigate this one to a URL
+        // WebKit cannot show. Either way Downloads.shared takes the transfer.
+        if action.shouldPerformDownload {
+            decisionHandler(.download)
+            return
+        }
         // Cmd-click / middle-click opens a background tab, like every other browser.
         // Middle-click always does; ⌘-click follows the Navigation setting, so with it
         // off the click falls through and the link loads in this tab.
@@ -282,9 +290,19 @@ extension Tab: WKNavigationDelegate {
         // Ordinary web navigation: load it here. NavigationPolicy keeps WebKit
         // from offering the URL to an installed app first, which is what made
         // clicks on links like xbox.com leave the browser and fail with 102.
-        // Downloads and redirects are unaffected: they are decided by the
-        // response policy that runs after this one allows the action.
+        // Redirects are unaffected: any download the server answers with is
+        // caught by the response policy below, which runs after this allows it.
         decisionHandler(NavigationPolicy.decision(for: url))
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        // Without this, a link to a file WebKit cannot render (zip, dmg, pdf
+        // without a viewer, ...) navigates the tab to a dead URL instead of
+        // downloading. Hand the bytes to Downloads.shared via didBecomeDownload.
+        // Main frame only: a subframe answering an odd MIME type is page content
+        // gone weird, not a file the user asked for.
+        decisionHandler(response.isForMainFrame && !response.canShowMIMEType ? .download : .allow)
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {

@@ -111,10 +111,14 @@ final class StatusPill: NSView {
 
 /// Determinate download ring for the toolbar. Hidden unless something is downloading,
 /// so it costs nothing at rest. No timer: progress arrives from WKDownload's KVO.
+/// Clicking it reveals the download folder, so it behaves like a button.
 final class DownloadIndicator: NSView {
     var progress: Double = 0 { didSet { needsDisplay = true } }
+    var onClick: (() -> Void)?
 
     override var isFlipped: Bool { true }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
 
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 3, dy: 3)

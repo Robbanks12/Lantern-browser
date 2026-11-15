@@ -139,6 +139,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         progressBar.active = false
         findRow.isHidden = true
         downloadIndicator.isHidden = true
+        downloadIndicator.onClick = { Downloads.shared.revealFolder() }
 
         backButton = ToolbarButton(symbol: "chevron.backward", tip: "Back (\u{2318}[)",
                                    target: self, action: #selector(goBack))

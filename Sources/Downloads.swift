@@ -7,8 +7,9 @@ extension Notification.Name {
     static let downloadsDidChange = Notification.Name("LanternDownloadsDidChange")
 }
 
-/// Downloads land in ~/Downloads with a de-duplicated name. No download manager
-/// window, no background service -- WebKit streams straight to disk.
+/// Downloads land in the Settings-chosen folder (else ~/Downloads) with a
+/// de-duplicated name. No download manager window, no background service --
+/// WebKit streams straight to disk.
 final class Downloads: NSObject, WKDownloadDelegate {
     static let shared = Downloads()
 
@@ -31,10 +32,10 @@ final class Downloads: NSObject, WKDownloadDelegate {
         return min(1, max(0, sum / Double(active.count)))
     }
 
-    private var folder: URL {
-        FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
-    }
+    /// Resolved on every use, so a Settings change applies to the very next
+    /// download with nothing to notify and nothing cached to go stale.
+    /// In-flight downloads keep the destination they were given at decision time.
+    private var folder: URL { Config.shared.downloadDirectoryURL }
 
     /// Server-supplied names are not trusted: keep only the last path component, drop
     /// anything that could escape the folder, and never land on a dotfile.
@@ -104,7 +105,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
             recent = Array(recent.prefix(20))
         }
         untrack(download)
-        statusHandler?("Saved \(name) to Downloads")
+        statusHandler?("Saved \(name) to \(folder.lastPathComponent)")
         NSSound(named: "Glass")?.play()
     }
 
