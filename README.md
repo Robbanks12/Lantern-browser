@@ -1,9 +1,14 @@
 # Lantern 🏮
 
+<p>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform: macOS" />
+</p>
+
 A minimal macOS web browser. A single ~950 KB app bundle, no dependencies, no bundled
 engine, no background services.
 
-Lantern renders with the WebKit already resident in macOS, It prioritizes low memory usage, native speed, and local privacy without the bloat of background updaters, telemetry daemons, or extension hosts.
+Lantern renders with the WebKit already resident in macOS, It prioritizes low memory usage, native speed, and local privacy without the bloat of background updaters, telemetry daemons, or extension ho[...]
 
 ## What actually makes it light
 
