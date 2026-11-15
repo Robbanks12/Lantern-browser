@@ -392,10 +392,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let url = Config.shared.downloadDirectoryURL
         popup.addItem(withTitle: url.lastPathComponent)
         if let item = popup.lastItem {
-            // The folder's own icon, the way Safari shows Downloads.
-            let icon = NSWorkspace.shared.icon(forFile: url.path)
-            icon.size = NSSize(width: 16, height: 16)
-            item.image = icon
+            // The stock folder icon, not the folder's own: asking LaunchServices about
+            // ~/Downloads reads the folder, which is what makes macOS ask for permission
+            // before a single file has been downloaded.
+            item.image = NSImage(named: NSImage.folderName)
         }
         popup.addItem(withTitle: "Choose…")
         popup.selectItem(at: 0)

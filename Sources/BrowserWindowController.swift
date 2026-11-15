@@ -12,7 +12,7 @@ final class BrowserChromeView: NSView {
     override var isFlipped: Bool { true }
 }
 
-final class BrowserWindowController: NSWindowController, NSWindowDelegate {
+final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPopoverDelegate {
 
     private(set) var tabs: [Tab] = []
     private(set) var activeIndex = 0
@@ -51,6 +51,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private let statusPill = StatusPill()
     private let downloadIndicator = DownloadIndicator()
     private let plusButton = NSButton()
+    /// Built on the first click and released when it closes, so a window that never
+    /// opens the list pays nothing for it.
+    private var downloadsPopover: NSPopover?
+    private var downloadsPopoverClosedAt: Date?
 
     private let findRow = BarBackgroundView()
     private let findField = NSTextField()
@@ -139,7 +143,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         progressBar.active = false
         findRow.isHidden = true
         downloadIndicator.isHidden = true
-        downloadIndicator.onClick = { Downloads.shared.revealFolder() }
+        // Its own layer, so switching from the progress ring to the settled glyph
+        // cannot leave the accent arc behind.
+        downloadIndicator.wantsLayer = true
+        downloadIndicator.onClick = { [weak self] in self?.toggleDownloadsPopover() }
 
         backButton = ToolbarButton(symbol: "chevron.backward", tip: "Back (\u{2318}[)",
                                    target: self, action: #selector(goBack))
@@ -462,6 +469,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         tabStrip.cancelDrag()
+        downloadsPopover?.close()
         saveSessionNow()
         NotificationCenter.default.removeObserver(self)
         hibernationTimer?.invalidate()
@@ -611,12 +619,48 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private func updateDownloadIndicator() {
         let d = Downloads.shared
-        downloadIndicator.isHidden = !d.isDownloading
+        // Visible while the list holds anything, so finished files stay reachable, and
+        // held in place while its popover is open even if the list empties under it.
+        downloadIndicator.isHidden = !d.hasItems && downloadsPopover == nil
+        downloadIndicator.isActive = d.isDownloading
         downloadIndicator.progress = d.overallProgress
         downloadIndicator.toolTip = d.isDownloading
             ? "\(d.activeCount) download\(d.activeCount == 1 ? "" : "s") \u{2014} \(Int(d.overallProgress * 100))%"
-            : nil
+            : (d.hasItems ? "Downloads" : nil)
         layoutChrome()
+    }
+
+    /// One popover, anchored under the indicator, created on demand and released when
+    /// it closes.
+    private func toggleDownloadsPopover() {
+        if let pop = downloadsPopover, pop.isShown {
+            pop.performClose(nil)
+            return
+        }
+        // A transient popover closes itself on the very click that lands on its anchor,
+        // so a click arriving just after that means "close", not "open again".
+        if let closedAt = downloadsPopoverClosedAt,
+           Date().timeIntervalSince(closedAt) < 0.25 {
+            downloadsPopoverClosedAt = nil
+            return
+        }
+        let pop = NSPopover()
+        pop.behavior = .transient
+        pop.animates = true
+        pop.delegate = self
+        pop.contentViewController = DownloadsPopoverController(nibName: nil, bundle: nil)
+        pop.show(relativeTo: downloadIndicator.bounds, of: downloadIndicator, preferredEdge: .minY)
+        downloadsPopover = pop
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        // Ignore a close from a popover that has already been replaced.
+        guard let pop = notification.object as? NSPopover, pop === downloadsPopover else { return }
+        downloadsPopoverClosedAt = Date()
+        downloadsPopover = nil
+        // Clearing the list while the popover was open left the anchor in place; now
+        // that it is closed it can go.
+        updateDownloadIndicator()
     }
 
     func refreshChrome() {

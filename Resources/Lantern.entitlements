@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Lantern is not sandboxed: the sandbox would cut off the libproc accounting the
+       memory readout needs and move config.json into a container. This key is therefore
+       inert today, and is signed anyway so that enabling the sandbox later grants the
+       Downloads folder without a TCC prompt. -->
+  <key>com.apple.security.files.downloads.read-write</key>
+  <true/>
+</dict>
+</plist>

@@ -41,6 +41,11 @@ with `tools/run-blocktest.sh`.
 tab allocates no web process. Restoring a session is lazy too — a 20-tab window
 comes back with exactly one live renderer.
 
+**5. Downloads without a download manager.** WebKit's networking process streams the
+bytes straight to disk; the toolbar's ring opens a small popover with each file's
+progress, pause/resume and Show in Finder. Plain AppKit views rebuilt only when the
+list changes, no manager window, no background service, no polling.
+
 Autoplay is off, which removes most background CPU and video decode memory.
 
 ### Compare it against your own browser

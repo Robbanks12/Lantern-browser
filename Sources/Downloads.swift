@@ -2,39 +2,115 @@ import AppKit
 import WebKit
 
 extension Notification.Name {
-    /// Posted when a download starts, progresses, finishes or fails. Driven entirely by
-    /// WebKit's callbacks and progress KVO, so there is nothing to poll.
+    /// Posted when a download starts, progresses, pauses, finishes or fails. Driven
+    /// entirely by WebKit's callbacks and progress KVO, so there is nothing to poll.
     static let downloadsDidChange = Notification.Name("LanternDownloadsDidChange")
 }
 
-/// Downloads land in the Settings-chosen folder (else ~/Downloads) with a
-/// de-duplicated name. No download manager window, no background service --
-/// WebKit streams straight to disk.
+/// One transfer, from the moment WebKit names its destination until the user clears it.
+///
+/// Progress comes from `WKDownload.progress` and is cached here, so the list can be
+/// drawn without touching the file system: nothing reads the Downloads folder, which
+/// is also what keeps a browse-only session out of TCC's Downloads permission.
+final class DownloadItem {
+    enum State: Equatable { case downloading, paused, finished, failed }
+
+    let id = UUID()
+    let name: String
+    /// WebKit's own suggestion, kept so a resumed transfer can be recognised without
+    /// trusting the file name it ended up with.
+    let suggestedName: String
+    let destination: URL
+    fileprivate(set) var state: State = .downloading
+    fileprivate(set) var completedBytes: Int64 = 0
+    fileprivate(set) var totalBytes: Int64 = 0
+    /// nil once the transfer is paused or over; the download belongs to WebKit.
+    fileprivate(set) var download: WKDownload?
+    fileprivate var observation: NSKeyValueObservation?
+    fileprivate var resumeData: Data?
+    fileprivate weak var webView: WKWebView?
+
+    fileprivate init(name: String, suggestedName: String, destination: URL, download: WKDownload?) {
+        self.name = name
+        self.suggestedName = suggestedName
+        self.destination = destination
+        self.download = download
+        self.webView = download?.webView
+        syncProgress()
+    }
+
+    /// 0…1 for the row's progress bar.
+    var fraction: Double {
+        if state == .finished { return 1 }
+        guard totalBytes > 0 else { return 0 }
+        return min(1, max(0, Double(completedBytes) / Double(totalBytes)))
+    }
+
+    /// The row's second line: a size once known, a running count while it arrives.
+    var detail: String {
+        switch state {
+        case .failed:
+            return "Failed"
+        case .finished:
+            return totalBytes > 0 ? DownloadItem.sizeText(totalBytes) : "Finished"
+        case .paused:
+            guard totalBytes > 0 else { return "Paused" }
+            return "\(DownloadItem.sizeText(completedBytes)) of \(DownloadItem.sizeText(totalBytes)) \u{00B7} Paused"
+        case .downloading:
+            guard totalBytes > 0 else { return "Starting\u{2026}" }
+            return "\(DownloadItem.sizeText(completedBytes)) of \(DownloadItem.sizeText(totalBytes))"
+        }
+    }
+
+    /// Copies WebKit's counters into the item, so a row never asks the progress object
+    /// (which is gone while paused) for anything.
+    fileprivate func syncProgress() {
+        guard let progress = download?.progress else { return }
+        if progress.totalUnitCount > 0 { totalBytes = progress.totalUnitCount }
+        if progress.completedUnitCount > 0 { completedBytes = progress.completedUnitCount }
+        if totalBytes > 0 { completedBytes = min(completedBytes, totalBytes) }
+    }
+
+    private static func sizeText(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+}
+
+/// The download list behind the toolbar's popover.
+///
+/// Downloads land in the Settings-chosen folder (else ~/Downloads) with a de-duplicated
+/// name, and WebKit streams straight to disk. This singleton is the strong owner of
+/// every `WKDownload` and its progress observation, so a transfer outlives the tab that
+/// started it. No download manager window, no background service, no timers.
 final class Downloads: NSObject, WKDownloadDelegate {
     static let shared = Downloads()
 
-    /// Set by the active window so finished downloads can be announced in the toolbar.
+    /// Set by the active window so downloads can be announced in the toolbar.
     var statusHandler: ((String) -> Void)?
-    private(set) var recent: [URL] = []
 
-    /// `WKDownload.delegate` is weak, so this singleton is the strong owner of both the
-    /// downloads and their progress observations: a download outlives the tab that
-    /// started it, and its progress stays observable until it terminates.
-    private var active: [(download: WKDownload, observation: NSKeyValueObservation)] = []
+    /// Newest first. Finished entries stay until the user clears them.
+    private(set) var items: [DownloadItem] = []
 
-    var isDownloading: Bool { !active.isEmpty }
-    var activeCount: Int { active.count }
+    /// WebKit resumes through a web view, so the last live one is kept for transfers
+    /// whose own tab has since been closed or put to sleep.
+    private weak var lastWebView: WKWebView?
+    /// The paused item a resume belongs to, until its destination is decided again.
+    private var resuming: DownloadItem?
 
-    /// Mean progress of the running downloads; 0 when idle.
+    var hasItems: Bool { !items.isEmpty }
+    var isDownloading: Bool { items.contains { $0.state == .downloading } }
+    var activeCount: Int { items.lazy.filter { $0.state == .downloading }.count }
+    var hasFinished: Bool { items.contains { $0.state == .finished || $0.state == .failed } }
+
+    /// Mean progress of the running transfers; 0 when idle.
     var overallProgress: Double {
-        guard !active.isEmpty else { return 0 }
-        let sum = active.reduce(0.0) { $0 + $1.download.progress.fractionCompleted }
-        return min(1, max(0, sum / Double(active.count)))
+        let running = items.filter { $0.state == .downloading }
+        guard !running.isEmpty else { return 0 }
+        return min(1, max(0, running.reduce(0) { $0 + $1.fraction } / Double(running.count)))
     }
 
-    /// Resolved on every use, so a Settings change applies to the very next
-    /// download with nothing to notify and nothing cached to go stale.
-    /// In-flight downloads keep the destination they were given at decision time.
+    /// Resolved on every use, so a Settings change applies to the very next download
+    /// with nothing to notify and nothing cached to go stale.
     private var folder: URL { Config.shared.downloadDirectoryURL }
 
     /// Server-supplied names are not trusted: keep only the last path component, drop
@@ -65,21 +141,34 @@ final class Downloads: NSObject, WKDownloadDelegate {
 
     // MARK: - Tracking
 
-    private func track(_ download: WKDownload) {
-        guard !active.contains(where: { $0.download === download }) else { return }
-        let observation = download.progress.observe(\.fractionCompleted, options: [.new]) {
-            [weak self] _, _ in self?.notifyChange()
+    private func item(for download: WKDownload) -> DownloadItem? {
+        items.first { $0.download === download }
+    }
+
+    /// Attaches an item to the download that will carry its bytes and starts observing
+    /// progress. Called once per transfer, and again when a paused one is resumed.
+    private func adopt(_ download: WKDownload, into item: DownloadItem) {
+        item.observation?.invalidate()
+        item.download = download
+        item.state = .downloading
+        if let wv = download.webView {
+            item.webView = wv
+            lastWebView = wv
         }
-        active.append((download, observation))
+        item.syncProgress()
+        item.observation = download.progress.observe(\.fractionCompleted, options: [.new]) {
+            [weak self, weak item] _, _ in
+            item?.syncProgress()
+            self?.notifyChange()
+        }
         notifyChange()
     }
 
-    /// Drops the observation and the reference together, so a finished download leaves
-    /// nothing behind in the toolbar's state.
-    private func untrack(_ download: WKDownload) {
-        guard let i = active.firstIndex(where: { $0.download === download }) else { return }
-        active[i].observation.invalidate()
-        active.remove(at: i)
+    /// Drops the observation and the download together; the item keeps its numbers.
+    private func detach(_ item: DownloadItem) {
+        item.observation?.invalidate()
+        item.observation = nil
+        item.download = nil
         notifyChange()
     }
 
@@ -91,35 +180,147 @@ final class Downloads: NSObject, WKDownloadDelegate {
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
                   suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        // A resumed transfer keeps the file it already started; only a fresh one gets a
+        // new, de-duplicated name in the chosen folder.
+        if let item = item(for: download) {
+            adopt(download, into: item)
+            completionHandler(item.destination)
+            return
+        }
+        // A resume re-asks for a destination under the same suggested name, which is
+        // how it finds its way back to the paused row.
+        if let pending = resuming, pending.suggestedName == suggestedFilename {
+            resuming = nil
+            adopt(download, into: pending)
+            completionHandler(pending.destination)
+            return
+        }
         let dest = uniqueDestination(for: suggestedFilename)
-        track(download)
-        statusHandler?("Downloading \(dest.lastPathComponent)\u{2026}")
+        let item = DownloadItem(name: dest.lastPathComponent, suggestedName: suggestedFilename,
+                                destination: dest, download: download)
+        items.insert(item, at: 0)
+        adopt(download, into: item)
+        statusHandler?("Downloading \(item.name)\u{2026}")
         // WebKit writes the bytes; we only pick where they land.
         completionHandler(dest)
     }
 
     func downloadDidFinish(_ download: WKDownload) {
-        let name = download.progress.fileURL?.lastPathComponent ?? "file"
-        if let u = download.progress.fileURL {
-            recent.insert(u, at: 0)
-            recent = Array(recent.prefix(20))
-        }
-        untrack(download)
-        statusHandler?("Saved \(name) to \(folder.lastPathComponent)")
+        guard let item = item(for: download) else { return }
+        item.syncProgress()
+        item.state = .finished
+        item.completedBytes = item.totalBytes
+        detach(item)
+        statusHandler?("Saved \(item.name) to \(item.destination.deletingLastPathComponent().lastPathComponent)")
         NSSound(named: "Glass")?.play()
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        untrack(download)
-        statusHandler?("Download failed: \(error.localizedDescription)")
+        guard let item = item(for: download) else { return }
+        // A cancel we asked for ourselves is a pause, not a failure.
+        if item.state == .paused {
+            item.resumeData = item.resumeData ?? resumeData
+            notifyChange()
+            return
+        }
+        item.syncProgress()
+        item.state = .failed
+        item.resumeData = resumeData
+        detach(item)
+        statusHandler?(Self.message(for: error))
     }
 
-    /// Opens the folder the download is landing in. When a transfer is in flight the
-    /// file itself is selected, which is what "show me the download" means while it
-    /// is still being written; otherwise the folder just opens.
+    private static func message(for error: Error) -> String {
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain, ns.code == NSFileWriteNoPermissionError {
+            return "Download failed: no permission to write to "
+                + Config.shared.downloadDirectoryURL.lastPathComponent
+                + ". Choose another folder in Settings."
+        }
+        return "Download failed: \(error.localizedDescription)"
+    }
+
+    // MARK: - Pause, resume, clear
+
+    /// WebKit has no pause, so a pause is a cancel that keeps its resume data, and a
+    /// resume replays that data through a live web view.
+    func togglePause(_ item: DownloadItem) {
+        switch item.state {
+        case .downloading:
+            guard let download = item.download else { return }
+            // Set before the cancel lands: its failure callback means "paused" now.
+            item.state = .paused
+            item.observation?.invalidate()
+            item.observation = nil
+            download.cancel { [weak self, weak item] data in
+                guard let self, let item else { return }
+                guard let data else {
+                    // No resume data means WebKit cannot continue this transfer, so say
+                    // so instead of leaving a row that will never move again.
+                    item.state = .failed
+                    self.statusHandler?("This download can't be paused")
+                    self.notifyChange()
+                    return
+                }
+                item.resumeData = data
+                self.notifyChange()
+            }
+            item.download = nil
+            notifyChange()
+        case .paused:
+            resume(item)
+        case .finished, .failed:
+            break
+        }
+    }
+
+    private func resume(_ item: DownloadItem) {
+        guard let data = item.resumeData, let webView = webViewForResume() else {
+            statusHandler?("Open a tab to resume this download")
+            return
+        }
+        item.state = .downloading
+        item.completedBytes = 0
+        resuming = item
+        notifyChange()
+        webView.resumeDownload(fromResumeData: data) { [weak self] download in
+            guard let self else { return }
+            // Progress and the outcome arrive only if the delegate is set right here.
+            download.delegate = self
+            // The destination callback may already have adopted this one; if it has
+            // not run yet, adopt here so the row moves either way.
+            if self.resuming === item {
+                self.resuming = nil
+                self.adopt(download, into: item)
+            }
+        }
+    }
+
+    /// The transfer's own tab may be gone, so fall back to the front tab; waking it
+    /// costs one web process, which is the price of carrying on the download.
+    private func webViewForResume() -> WKWebView? {
+        if let wv = lastWebView, wv.window != nil { return wv }
+        guard let tab = AppDelegate.shared?.front?.activeTab else { return nil }
+        let wv = tab.ensureLoaded()
+        lastWebView = wv
+        return wv
+    }
+
+    /// Removes everything that is no longer running. The running ones stay: clearing
+    /// the list must never cancel a transfer.
+    func clearFinished() {
+        items.removeAll { $0.state == .finished || $0.state == .failed }
+        notifyChange()
+    }
+
+    func reveal(_ item: DownloadItem) {
+        NSWorkspace.shared.activateFileViewerSelecting([item.destination])
+    }
+
+    /// Opens the folder downloads land in, selecting a file that is still arriving.
     func revealFolder() {
-        if let inFlight = active.lazy.compactMap({ $0.download.progress.fileURL }).first {
-            NSWorkspace.shared.activateFileViewerSelecting([inFlight])
+        if let running = items.first(where: { $0.state == .downloading }) {
+            reveal(running)
             return
         }
         NSWorkspace.shared.open(folder)

@@ -109,11 +109,14 @@ final class StatusPill: NSView {
     }
 }
 
-/// Determinate download ring for the toolbar. Hidden unless something is downloading,
-/// so it costs nothing at rest. No timer: progress arrives from WKDownload's KVO.
-/// Clicking it reveals the download folder, so it behaves like a button.
+/// Download control for the toolbar: a ring while a transfer runs, a download glyph
+/// once everything has finished but the list still has entries. Hidden when the list
+/// is empty, so it costs nothing at rest. No timer: progress arrives from WKDownload's
+/// KVO. Clicking it opens the downloads popover, so it behaves like a button.
 final class DownloadIndicator: NSView {
     var progress: Double = 0 { didSet { needsDisplay = true } }
+    /// True while a transfer runs. False draws the settled glyph instead of the ring.
+    var isActive = true { didSet { needsDisplay = true } }
     var onClick: (() -> Void)?
 
     override var isFlipped: Bool { true }
@@ -130,6 +133,7 @@ final class DownloadIndicator: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 3, dy: 3)
+        guard isActive else { drawSettledGlyph(in: r); return }
         let center = NSPoint(x: r.midX, y: r.midY)
         let radius = min(r.width, r.height) / 2
 
@@ -146,6 +150,30 @@ final class DownloadIndicator: NSView {
         NSColor.controlAccentColor.setStroke()
         arc.lineWidth = 2
         arc.stroke()
+    }
+
+    /// Everything finished, list not yet cleared: the same ring, closed, with the arrow
+    /// that means "downloads". Drawn as paths so it needs no image tinting and stays
+    /// sharp at any backing scale.
+    private func drawSettledGlyph(in rect: NSRect) {
+        NSColor.secondaryLabelColor.setStroke()
+
+        let ring = NSBezierPath(ovalIn: rect.insetBy(dx: 0.8, dy: 0.8))
+        ring.lineWidth = 1.5
+        ring.stroke()
+
+        let cx = rect.midX
+        let cy = rect.midY
+        let arrow = NSBezierPath()
+        arrow.move(to: NSPoint(x: cx, y: cy - 5))
+        arrow.line(to: NSPoint(x: cx, y: cy + 2.5))
+        arrow.move(to: NSPoint(x: cx - 3.5, y: cy - 1))
+        arrow.line(to: NSPoint(x: cx, y: cy + 3.5))
+        arrow.line(to: NSPoint(x: cx + 3.5, y: cy - 1))
+        arrow.lineWidth = 1.5
+        arrow.lineCapStyle = .round
+        arrow.lineJoinStyle = .round
+        arrow.stroke()
     }
 }
 
