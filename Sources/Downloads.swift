@@ -114,7 +114,14 @@ final class Downloads: NSObject, WKDownloadDelegate {
         statusHandler?("Download failed: \(error.localizedDescription)")
     }
 
+    /// Opens the folder the download is landing in. When a transfer is in flight the
+    /// file itself is selected, which is what "show me the download" means while it
+    /// is still being written; otherwise the folder just opens.
     func revealFolder() {
+        if let inFlight = active.lazy.compactMap({ $0.download.progress.fileURL }).first {
+            NSWorkspace.shared.activateFileViewerSelecting([inFlight])
+            return
+        }
         NSWorkspace.shared.open(folder)
     }
 }

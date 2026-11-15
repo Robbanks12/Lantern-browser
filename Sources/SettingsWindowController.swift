@@ -252,14 +252,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         setCurrent.bezelStyle = .rounded
         b.indented(setCurrent)
 
+        b.note("New tabs open the homepage when one is set. Blank keeps the native start page.")
+        b.spacer(10)
+
+        // Safari puts the download folder below the home page block, in its own group.
         let downloads = NSPopUpButton(frame: .zero, pullsDown: false)
         syncDownloadPopup(downloads)
         downloads.target = self
         downloads.action = #selector(chooseDownloadFolder(_:))
         b.row("File download location:", downloads)
         downloadPopup = downloads
-
-        b.note("New tabs open the homepage when one is set. Blank keeps the native start page.")
     }
 
     private func buildTabs(_ b: PaneBuilder) {
@@ -390,8 +392,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let url = Config.shared.downloadDirectoryURL
         popup.addItem(withTitle: url.lastPathComponent)
         if let item = popup.lastItem {
-            item.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
+            // The folder's own icon, the way Safari shows Downloads.
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            icon.size = NSSize(width: 16, height: 16)
+            item.image = icon
         }
         popup.addItem(withTitle: "Choose…")
         popup.selectItem(at: 0)
@@ -399,10 +403,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func chooseDownloadFolder(_ sender: NSPopUpButton) {
-        // The folder item itself is display-only; only "Choose…" acts.
-        guard sender.indexOfSelectedItem == sender.numberOfItems - 1,
-              let w = window else {
-            if sender.indexOfSelectedItem != sender.numberOfItems - 1 { syncDownloadPopup(sender) }
+        // The folder item itself is display-only; only "Choose…" acts. Re-select it
+        // rather than rebuilding the menu inside its own action.
+        guard sender.indexOfSelectedItem == sender.numberOfItems - 1, let w = window else {
+            sender.selectItem(at: 0)
             return
         }
         let panel = NSOpenPanel()

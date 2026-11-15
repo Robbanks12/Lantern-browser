@@ -120,6 +120,14 @@ final class DownloadIndicator: NSView {
 
     override func mouseDown(with event: NSEvent) { onClick?() }
 
+    /// A toolbar control, so the first click counts even while the window is inactive.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// A ring does not look like a button on its own; the pointing hand says it is one.
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 3, dy: 3)
         let center = NSPoint(x: r.midX, y: r.midY)

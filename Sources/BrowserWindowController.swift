@@ -271,6 +271,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         var right = toolbarWidth - 12
         plusButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
         right -= bw + 2
+
+        // The download ring sits immediately left of New Tab, between it and the
+        // memory readout. It keeps its slot whether or not the pill is shown, so
+        // the two never overlap and the row does not shuffle when one appears.
+        if !downloadIndicator.isHidden {
+            downloadIndicator.frame = NSRect(x: right - 22, y: (toolRow - 22) / 2, width: 22, height: 22)
+            right -= 22 + 2
+        }
+
         if Settings.shared.showMemoryPill(jsonValue: Config.shared.showMemoryReadout) {
             statusPill.isHidden = false
             let w = max(64, min(190, statusPill.fittingWidth))
@@ -278,11 +287,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             right -= w + 4
         } else {
             statusPill.isHidden = true
-        }
-
-        if !downloadIndicator.isHidden {
-            downloadIndicator.frame = NSRect(x: right - 22, y: (toolRow - 22) / 2, width: 22, height: 22)
-            right -= 22 + 2
         }
         shieldButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
         right -= bw + 2

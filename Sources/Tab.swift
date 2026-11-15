@@ -54,6 +54,11 @@ final class Tab: NSObject {
     /// exact configuration it handed us, and it performs the navigation itself.
     private var providedConfiguration: WKWebViewConfiguration?
     private var webKitWillLoad = false
+    /// True for a tab WebKit created for another tab's window.open / target=_blank.
+    private let isOpenerTarget: Bool
+    /// Set once a navigation actually commits. A download never commits, so a
+    /// still-false value means this tab exists only to host the transfer.
+    private var hasCommittedNavigation = false
     private var observations: [NSKeyValueObservation] = []
     private static var faviconCache: [String: NSImage] = [:]
 
@@ -71,6 +76,7 @@ final class Tab: NSObject {
         self.pendingURL = url
         self.providedConfiguration = configuration
         self.webKitWillLoad = (configuration != nil)
+        self.isOpenerTarget = (configuration != nil)
         super.init()
         if let url { self.favicon = Tab.faviconCache[url.host ?? ""] }
     }
@@ -79,6 +85,7 @@ final class Tab: NSObject {
     init(saved: SavedTab, delegate: TabDelegate?) {
         self.isPrivate = false
         self.delegate = delegate
+        self.isOpenerTarget = false
         self.url = URL(string: saved.url)
         self.title = saved.title
         self.savedInteractionState = saved.interactionState
@@ -267,11 +274,14 @@ extension Tab: WKNavigationDelegate {
             return
         }
         // An explicit download intent (download attribute, direct binary link)
-        // wins over everything below: opening a new tab for it would leave a
-        // blank tab behind, and allowing it would navigate this one to a URL
-        // WebKit cannot show. Either way Downloads.shared takes the transfer.
+        // wins over everything below: allowing it would navigate this tab to a
+        // URL WebKit cannot show, and the ⌘-click branch would hand it a fresh
+        // tab with nothing in it. Downloads.shared takes the transfer instead.
         if action.shouldPerformDownload {
             decisionHandler(.download)
+            // A target=_blank link to a file arrives in a tab of its own; that tab
+            // must not be left behind empty once the transfer has taken over.
+            retireIfBlankOpenerTarget()
             return
         }
         // Cmd-click / middle-click opens a background tab, like every other browser.
@@ -302,10 +312,31 @@ extension Tab: WKNavigationDelegate {
         // downloading. Hand the bytes to Downloads.shared via didBecomeDownload.
         // Main frame only: a subframe answering an odd MIME type is page content
         // gone weird, not a file the user asked for.
-        decisionHandler(response.isForMainFrame && !response.canShowMIMEType ? .download : .allow)
+        if response.isForMainFrame && !response.canShowMIMEType {
+            decisionHandler(.download)
+            retireIfBlankOpenerTarget()
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    /// A target=_blank or window.open link to a file is handed to us as a brand new
+    /// tab, which WebKit then turns into a download before anything loads in it. That
+    /// tab would stay empty for good, so ask the window to drop it -- but only ever a
+    /// tab that has never committed a page, so an ordinary blank tab is untouched.
+    private func retireIfBlankOpenerTarget() {
+        guard isOpenerTarget, !hasCommittedNavigation else { return }
+        // Off the policy callback: closing a tab there would dissolve the web view
+        // WebKit is still using to finish deciding this navigation. The download
+        // itself is owned by Downloads.shared, the way it is for any closed tab.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasCommittedNavigation else { return }
+            self.delegate?.tabRequestsClose(self)
+        }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        hasCommittedNavigation = true
         delegate?.tabDidChangeState(self)
     }
 
