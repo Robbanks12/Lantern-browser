@@ -107,12 +107,15 @@ currently asleep — hover it for the per-process breakdown.
 
 ## Configuration
 
-`~/Library/Application Support/Lantern/config.json` — edited with `⌘,`, applied on
-restart.
+`~/Library/Application Support/Lantern/config.json` — edited with `⌘,`. Most changes
+apply immediately; restoring the session waits for the next launch and developer
+tools for newly opened tabs.
 
 | key | default | |
 |---|---|---|
+| `searchEngine` | Google | the `⌘,` dropdown; `searchTemplate` follows it |
 | `searchTemplate` | Google | `%s` is the query; e.g. `https://duckduckgo.com/?q=%s` |
+| `homepage` | `about:blank` | new tabs open this page; blank means the start page |
 | `hibernateAfterMinutes` | `5` | `0` disables sleeping |
 | `hibernateOnMemoryPressure` | `true` | sleep everything when macOS says it is low |
 | `blockAdsAndTrackers` | `true` | also the shield button in the toolbar |
