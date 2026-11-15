@@ -1,5 +1,10 @@
 # Lantern 🏮
 
+<p>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform: macOS" />
+</p>
+
 A minimal macOS web browser. A single ~950 KB app bundle, no dependencies, no bundled
 engine, no background services.
 
