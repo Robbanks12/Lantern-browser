@@ -123,6 +123,9 @@ tools for newly opened tabs.
 | `showMemoryReadout` | `true` | |
 | `enableDeveloperTools` | `true` | |
 | `doubleClickTabStripForNewTab` | `true` | double-clicking empty tab strip space opens a tab |
+| `commandClickOpensNewTab` | `true` | off means ⌘-click behaves like a plain click |
+| `activateNewTabsOnOpen` | `false` | a link opened in a new tab becomes active |
+| `useCommandNumberTabShortcuts` | `true` | ⌘-1 through ⌘-9 switch tabs |
 
 Same folder holds `blocked-domains.txt` (one domain per line, `#` comments — add
 your own and restart), `history.json`, `bookmarks.json` and `session.json`. All

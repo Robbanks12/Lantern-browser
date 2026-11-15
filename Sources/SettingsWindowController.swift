@@ -31,9 +31,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private static let windowWidth: CGFloat = 600
-    /// Title row (drawn under the transparent titlebar) plus the icon tab row.
-    private static let chromeHeight: CGFloat = 100
-    private static let tabButtonSize = NSSize(width: 92, height: 62)
+    /// Title row (drawn under the transparent titlebar) plus the compact tab row.
+    private static let chromeHeight: CGFloat = 70
     private static let bottomPadding: CGFloat = 56
 
     private let band = FlippedView()
@@ -42,6 +41,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let paneHost = FlippedView()
     private let helpButton = NSButton()
     private var paneButtons: [NSButton] = []
+    private var chipWidths: [CGFloat] = []
     private var currentPane: Pane = .general
 
     /// Rebuilt on every pane switch, so it is only a weak reference to the live field.
@@ -95,18 +95,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             let b = NSButton(frame: .zero)
             b.isBordered = false
             b.wantsLayer = true
-            b.layer?.cornerRadius = 8
-            b.imagePosition = .imageAbove
-            b.alignment = .center
+            b.layer?.cornerRadius = 6
+            // Icon and label side by side, so each tab is a small chip rather than
+            // a tall tile.
+            b.imagePosition = .imageLeading
             b.imageScaling = .scaleProportionallyDown
             b.image = NSImage(systemSymbolName: pane.symbol, accessibilityDescription: pane.title)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 20, weight: .regular))
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
             b.tag = pane.rawValue
             b.target = self
             b.action = #selector(choosePane(_:))
             b.toolTip = pane.title
             band.addSubview(b)
             paneButtons.append(b)
+            chipWidths.append(Self.chipWidth(for: pane.title))
         }
 
         hairline.boxType = .separator
@@ -140,14 +142,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                                 height: max(0, size.height - Self.chromeHeight))
         helpButton.frame = NSRect(x: size.width - 46, y: size.height - 46, width: 28, height: 28)
 
-        let tabSize = Self.tabButtonSize
-        let count = CGFloat(paneButtons.count)
-        let gap = max(12, (size.width - count * tabSize.width) / (count + 1))
-        var x = gap
-        for b in paneButtons {
-            b.frame = NSRect(x: x, y: 31, width: tabSize.width, height: tabSize.height)
-            x += tabSize.width + gap
+        // The chips form one centred row.
+        let gap: CGFloat = 8
+        let total = chipWidths.reduce(0, +) + gap * CGFloat(max(0, chipWidths.count - 1))
+        var x = max(12, (size.width - total) / 2)
+        for (i, b) in paneButtons.enumerated() {
+            let w = chipWidths.indices.contains(i) ? chipWidths[i] : 90
+            b.frame = NSRect(x: x, y: 33, width: w, height: 26)
+            x += w + gap
         }
+    }
+
+    private static func chipWidth(for title: String) -> CGFloat {
+        let text = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width
+        return ceil(text) + 13 + 6 + 20   // icon, gap, padding
     }
 
     func windowDidResize(_ notification: Notification) {
@@ -277,6 +285,28 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         b.note("Sleeping destroys a tab's web process and keeps its scroll position and history, "
                + "so a background tab costs a couple of KB instead of ~100 MB.")
+        b.spacer(6)
+
+        let commandClick = NSButton(checkboxWithTitle: "⌘-click opens a link in a new tab",
+                                    target: self, action: #selector(toggleCommandClickNewTab(_:)))
+        commandClick.state = Config.shared.commandClickOpensNewTab ? .on : .off
+        b.row("Navigation:", commandClick)
+
+        let activate = NSButton(checkboxWithTitle: "Make a new tab the active tab",
+                                target: self, action: #selector(toggleActivateNewTab(_:)))
+        activate.state = Config.shared.activateNewTabsOnOpen ? .on : .off
+        b.indented(activate)
+
+        let numberKeys = NSButton(checkboxWithTitle: "Use ⌘-1 through ⌘-9 to switch tabs",
+                                  target: self, action: #selector(toggleCommandNumberTabs(_:)))
+        numberKeys.state = Config.shared.useCommandNumberTabShortcuts ? .on : .off
+        b.indented(numberKeys)
+
+        b.note("With ⌘-click off it behaves like an ordinary click. Middle-click always "
+               + "opens a background tab.")
+        b.spacer(2)
+        b.legend("⌘-click:", "Opens a link in a new background tab.")
+        b.legend("⌘-Shift-click:", "Opens a link in a new tab, and makes it active.")
     }
 
     private func buildSearch(_ b: PaneBuilder) {
@@ -406,6 +436,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         Config.shared.save()
     }
 
+    @objc private func toggleCommandClickNewTab(_ sender: NSButton) {
+        // Read while WebKit decides each link click, so it applies immediately.
+        Config.shared.commandClickOpensNewTab = (sender.state == .on)
+        Config.shared.save()
+    }
+
+    @objc private func toggleActivateNewTab(_ sender: NSButton) {
+        Config.shared.activateNewTabsOnOpen = (sender.state == .on)
+        Config.shared.save()
+    }
+
+    @objc private func toggleCommandNumberTabs(_ sender: NSButton) {
+        // The Window menu validates against this, so the shortcut follows at once.
+        Config.shared.useCommandNumberTabShortcuts = (sender.state == .on)
+        Config.shared.save()
+    }
+
     // MARK: - Privacy
 
     @objc private func toggleBlocking(_ sender: NSButton) {
@@ -526,9 +573,12 @@ private final class PaneBuilder {
     /// Where the last row ended, so the window can be sized to fit the pane.
     var maxY: CGFloat { y }
 
-    private var labelRight: CGFloat { 272 }
-    private var controlX: CGFloat { 286 }
-    private var controlWidth: CGFloat { width - controlX - 22 }
+    /// The label+control block is centred in the window, so the pane reads as one
+    /// column instead of hugging the left edge.
+    private var blockLeft: CGFloat { max(20, (width - 450) / 2) }
+    private var labelRight: CGFloat { blockLeft + 160 }
+    private var controlX: CGFloat { labelRight + 10 }
+    private var controlWidth: CGFloat { width - controlX - blockLeft }
 
     init(host: NSView, width: CGFloat) {
         self.host = host
@@ -540,7 +590,7 @@ private final class PaneBuilder {
         label.alignment = .right
         label.font = .systemFont(ofSize: 13)
         label.lineBreakMode = .byTruncatingTail
-        label.frame = NSRect(x: 22, y: y + (height - 17) / 2, width: labelRight - 22, height: 17)
+        label.frame = NSRect(x: blockLeft, y: y + (height - 17) / 2, width: labelRight - blockLeft, height: 17)
         host.addSubview(label)
         control.frame = NSRect(x: controlX, y: y, width: controlWidth, height: height)
         host.addSubview(control)
@@ -565,6 +615,25 @@ private final class PaneBuilder {
         note.frame = NSRect(x: controlX, y: y, width: controlWidth, height: h)
         host.addSubview(note)
         y += h + 10
+    }
+
+    /// A read-only row: the gesture on the label side, what it does beside it.
+    func legend(_ key: String, _ text: String) {
+        let label = NSTextField(labelWithString: key)
+        label.alignment = .right
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        let desc = NSTextField(wrappingLabelWithString: text)
+        desc.font = .systemFont(ofSize: 11)
+        desc.textColor = .secondaryLabelColor
+        desc.preferredMaxLayoutWidth = controlWidth
+        let h = max(16, desc.cell?.cellSize(
+            forBounds: NSRect(x: 0, y: 0, width: controlWidth, height: .greatestFiniteMagnitude)).height ?? 16)
+        label.frame = NSRect(x: blockLeft, y: y + 1, width: labelRight - blockLeft, height: 16)
+        desc.frame = NSRect(x: controlX, y: y, width: controlWidth, height: h)
+        host.addSubview(label)
+        host.addSubview(desc)
+        y += h + 2
     }
 
     func spacer(_ h: CGFloat) { y += h }
