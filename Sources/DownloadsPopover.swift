@@ -1,7 +1,9 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// The downloads popover: a header, a short list, and one button per row.
+/// The downloads popover, laid out like Safari's: a centred title with Clear on the
+/// right, then one short row per file with its icon, name over size, and a button that
+/// is Pause, Resume or Show in Finder.
 ///
 /// Plain views rather than `NSTableView`: the list is tiny and fixed-shape, so there is
 /// no data source, no cell reuse and no column machinery to pay for. Nothing exists
@@ -9,11 +11,11 @@ import UniformTypeIdentifiers
 final class DownloadsPopoverController: NSViewController {
 
     private enum Metrics {
-        static let width: CGFloat = 320
-        static let header: CGFloat = 38
-        static let row: CGFloat = 54
-        /// Five rows is about a screenful of hands-on downloads; the rest scroll.
-        static let visibleRows = 5
+        static let width: CGFloat = 520
+        static let header: CGFloat = 44
+        static let row: CGFloat = 52
+        /// Nine rows fill the popover; anything beyond that scrolls.
+        static let visibleRows = 9
     }
 
     private let titleLabel = NSTextField(labelWithString: "Downloads")
@@ -24,6 +26,8 @@ final class DownloadsPopoverController: NSViewController {
     private let emptyLabel = NSTextField(labelWithString: "No downloads")
     private var rows: [DownloadRowView] = []
     private var shownIDs: [UUID] = []
+    /// Which row is picked out, the way a list marks one item. nil until a click.
+    private var selectedID: UUID?
     /// nil until the first style pass, so the button is titled even when nothing has
     /// finished yet.
     private var clearEnabled: Bool?
@@ -34,6 +38,7 @@ final class DownloadsPopoverController: NSViewController {
                                              height: Metrics.header + Metrics.row))
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.alignment = .center
         root.addSubview(titleLabel)
 
         clearButton.isBordered = false
@@ -89,6 +94,8 @@ final class DownloadsPopoverController: NSViewController {
     private func reload() {
         let items = Downloads.shared.items
         let ids = items.map(\.id)
+        if let id = selectedID, !ids.contains(id) { selectedID = nil }
+
         var rebuilt = false
         if ids != shownIDs {
             shownIDs = ids
@@ -115,10 +122,18 @@ final class DownloadsPopoverController: NSViewController {
         rows.forEach { $0.removeFromSuperview() }
         rows = items.map { item in
             let row = DownloadRowView(item: item)
+            row.isSelected = item.id == selectedID
             row.onAction = { [weak self] in self?.performAction(for: item) }
+            row.onSelect = { [weak self] in self?.select(item) }
             listView.addSubview(row)
             return row
         }
+    }
+
+    private func select(_ item: DownloadItem) {
+        guard selectedID != item.id else { return }
+        selectedID = item.id
+        for row in rows { row.isSelected = row.itemID == item.id }
     }
 
     private func styleClearButton() {
@@ -127,8 +142,8 @@ final class DownloadsPopoverController: NSViewController {
         clearEnabled = enabled
         clearButton.isEnabled = enabled
         clearButton.attributedTitle = NSAttributedString(string: "Clear", attributes: [
-            .font: NSFont.systemFont(ofSize: 12),
-            .foregroundColor: enabled ? NSColor.linkColor : NSColor.tertiaryLabelColor,
+            .font: NSFont.systemFont(ofSize: 13),
+            .foregroundColor: enabled ? NSColor.labelColor : NSColor.tertiaryLabelColor,
         ])
     }
 
@@ -153,8 +168,11 @@ final class DownloadsPopoverController: NSViewController {
     private func layoutContents() {
         let w = max(Metrics.width, view.bounds.width)
         let clearSize = clearButton.attributedTitle.size()
-        titleLabel.frame = NSRect(x: 14, y: 11, width: w - 90, height: 16)
-        clearButton.frame = NSRect(x: w - clearSize.width - 16, y: 10,
+
+        // Centred across the whole bar, with Clear sitting over the right end, the way
+        // Safari's header reads.
+        titleLabel.frame = NSRect(x: 0, y: 14, width: w, height: 16)
+        clearButton.frame = NSRect(x: w - clearSize.width - 18, y: 13,
                                    width: clearSize.width + 2, height: 18)
         divider.frame = NSRect(x: 0, y: Metrics.header - 1, width: w, height: 1)
 
@@ -169,15 +187,34 @@ final class DownloadsPopoverController: NSViewController {
 }
 
 /// One download: its icon, name over size, and a single button that means Pause,
-/// Resume or Show in Finder. The progress bar is drawn rather than built from views.
+/// Resume or Show in Finder. Hovering tints the row; clicking picks it out, the way a
+/// list does. The progress bar is drawn rather than built from views.
 final class DownloadRowView: NSView {
+
+    private enum Layout {
+        static let icon = NSRect(x: 26, y: 9, width: 30, height: 34)
+        static let textX: CGFloat = 74
+        static let textRight: CGFloat = 78
+        static let actionWidth: CGFloat = 26
+        static let actionInset: CGFloat = 60
+        static let highlightInset: CGFloat = 8
+    }
 
     private let item: DownloadItem
     private let iconView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let sizeLabel = NSTextField(labelWithString: "")
     private let actionButton = NSButton()
+    private var isHovered = false { didSet { needsDisplay = true } }
     var onAction: (() -> Void)?
+    var onSelect: (() -> Void)?
+
+    var itemID: UUID { item.id }
+
+    /// Picked out: accent fill, white text, exactly like a selected list row.
+    var isSelected = false {
+        didSet { if isSelected != oldValue { refresh() } }
+    }
 
     init(item: DownloadItem) {
         self.item = item
@@ -189,7 +226,7 @@ final class DownloadRowView: NSView {
         iconView.imageScaling = .scaleProportionallyDown
         addSubview(iconView)
 
-        nameLabel.font = .systemFont(ofSize: 12)
+        nameLabel.font = .systemFont(ofSize: 13)
         nameLabel.lineBreakMode = .byTruncatingMiddle
         nameLabel.cell?.usesSingleLineMode = true
         addSubview(nameLabel)
@@ -219,9 +256,26 @@ final class DownloadRowView: NSView {
         layoutContents()
     }
 
+    // Hover is tracked so the row tints the way Safari's do. It costs one tracking
+    // area per visible row and nothing while the popover is closed.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(rect: .zero,
+                                       options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+    override func mouseDown(with event: NSEvent) { onSelect?() }
+
     func refresh() {
         nameLabel.stringValue = item.name
         sizeLabel.stringValue = item.detail
+        nameLabel.textColor = isSelected ? .white : .labelColor
+        sizeLabel.textColor = isSelected ? NSColor.white.withAlphaComponent(0.8) : .secondaryLabelColor
+
         switch item.state {
         case .downloading:
             actionButton.image = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: "Pause")
@@ -233,6 +287,7 @@ final class DownloadRowView: NSView {
             actionButton.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Show in Finder")
             actionButton.toolTip = "Show in Finder"
         }
+        actionButton.contentTintColor = isSelected ? .white : .secondaryLabelColor
         // By content type, never by opening the file: reading the Downloads folder is
         // exactly what makes macOS ask for permission.
         iconView.image = DownloadRowView.icon(for: item)
@@ -243,16 +298,27 @@ final class DownloadRowView: NSView {
 
     private func layoutContents() {
         let w = bounds.width
-        iconView.frame = NSRect(x: 14, y: 11, width: 32, height: 32)
-        let textX: CGFloat = 56
-        nameLabel.frame = NSRect(x: textX, y: 9, width: max(0, w - textX - 44), height: 16)
-        sizeLabel.frame = NSRect(x: textX, y: 26, width: max(0, w - textX - 44), height: 14)
-        actionButton.frame = NSRect(x: w - 40, y: 15, width: 26, height: 24)
+        iconView.frame = Layout.icon
+        let textWidth = max(0, w - Layout.textX - Layout.textRight)
+        nameLabel.frame = NSRect(x: Layout.textX, y: 8, width: textWidth, height: 17)
+        sizeLabel.frame = NSRect(x: Layout.textX, y: 26, width: textWidth, height: 14)
+        actionButton.frame = NSRect(x: w - Layout.actionInset, y: 13,
+                                    width: Layout.actionWidth, height: Layout.actionWidth)
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        let plate = bounds.insetBy(dx: Layout.highlightInset, dy: 3)
+        if isSelected {
+            NSColor.controlAccentColor.setFill()
+            NSBezierPath(roundedRect: plate, xRadius: 7, yRadius: 7).fill()
+        } else if isHovered {
+            NSColor.labelColor.withAlphaComponent(0.08).setFill()
+            NSBezierPath(roundedRect: plate, xRadius: 7, yRadius: 7).fill()
+        }
+
         guard item.state == .downloading || item.state == .paused else { return }
-        let track = NSRect(x: 14, y: bounds.height - 7, width: max(0, bounds.width - 28), height: 2)
+        let track = NSRect(x: Layout.textX, y: bounds.height - 6,
+                           width: max(0, bounds.width - Layout.textX - Layout.textRight), height: 2)
         NSColor.quaternaryLabelColor.withAlphaComponent(0.4).setFill()
         NSBezierPath(roundedRect: track, xRadius: 1, yRadius: 1).fill()
 
