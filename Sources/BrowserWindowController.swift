@@ -298,14 +298,25 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
         shieldButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
         right -= bw + 2
         bookmarkButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
-        right -= bw + 2
-        reloadButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
-        right -= bw + 10
 
-        let urlX = forwardButton.frame.maxX + 10
+        // Reload belongs with the address bar, not with the page buttons. Safari leaves
+        // a clear gap either side of that pair, so the slack is split evenly between the
+        // nav buttons and the page controls, and reload keeps a small gap to the bar so
+        // the two still read as one block.
+        let reloadGap: CGFloat = 8
+        let minBarWidth: CGFloat = 220
+        let navRight = forwardButton.frame.maxX
+        let available = bookmarkButton.frame.minX - navRight
+        let slack = available - bw - reloadGap - minBarWidth
+        let sideGap = max(14, min(toolbarWidth * 0.14, slack / 2))
+
+        let reloadX = bookmarkButton.frame.minX - sideGap - bw
+        reloadButton.frame = NSRect(x: reloadX, y: y, width: bw, height: bh)
+
+        let urlX = navRight + sideGap
         let fieldH: CGFloat = 28
         urlBar.frame = NSRect(x: urlX, y: (toolRow - fieldH) / 2,
-                              width: max(90, right - urlX), height: fieldH)
+                              width: max(90, reloadX - reloadGap - urlX), height: fieldH)
 
         if findVisible {
             findField.frame = NSRect(x: 14, y: 5, width: 250, height: 24)
