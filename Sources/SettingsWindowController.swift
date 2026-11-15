@@ -394,8 +394,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if let item = popup.lastItem {
             // The stock folder icon, not the folder's own: asking LaunchServices about
             // ~/Downloads reads the folder, which is what makes macOS ask for permission
-            // before a single file has been downloaded.
-            item.image = NSImage(named: NSImage.folderName)
+            // before a single file has been downloaded. Menu items draw images at their
+            // natural size and the stock icon is large, so it has to be pinned to the
+            // 16 point slot menus use or it overflows the row.
+            if let icon = NSImage(named: NSImage.folderName)?.copy() as? NSImage {
+                icon.size = NSSize(width: 16, height: 16)
+                item.image = icon
+            }
         }
         popup.addItem(withTitle: "Choose…")
         popup.selectItem(at: 0)

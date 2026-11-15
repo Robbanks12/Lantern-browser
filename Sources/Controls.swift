@@ -121,6 +121,22 @@ final class DownloadIndicator: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// Same hover outline as the toolbar buttons either side of it.
+    private var hovering = false { didSet { needsDisplay = true } }
+    private var trackingAreaRef: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingAreaRef { removeTrackingArea(trackingAreaRef) }
+        let t = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow],
+                              owner: self, userInfo: nil)
+        addTrackingArea(t)
+        trackingAreaRef = t
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
     override func mouseDown(with event: NSEvent) { onClick?() }
 
     /// A toolbar control, so the first click counts even while the window is inactive.
@@ -140,6 +156,10 @@ final class DownloadIndicator: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        if hovering {
+            NSColor.quaternaryLabelColor.withAlphaComponent(0.28).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+        }
         let r = ringBounds
         guard isActive else { drawSettledGlyph(in: r); return }
         let center = NSPoint(x: r.midX, y: r.midY)

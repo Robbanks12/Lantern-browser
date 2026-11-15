@@ -50,7 +50,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
     private var urlField: URLField { urlBar.field }
     private let statusPill = StatusPill()
     private let downloadIndicator = DownloadIndicator()
-    private let plusButton = NSButton()
+    private var plusButton: ToolbarButton!
     /// Built on the first click and released when it closes, so a window that never
     /// opens the list pays nothing for it.
     private var downloadsPopover: NSPopover?
@@ -161,13 +161,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
                                      tip: "Ad & tracker blocking",
                                      target: self, action: #selector(toggleBlocking))
 
-        plusButton.bezelStyle = .accessoryBarAction
-        plusButton.isBordered = false
-        plusButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")
-        plusButton.imageScaling = .scaleProportionallyDown
-        plusButton.target = self
-        plusButton.action = #selector(newTabFromToolbar)
-        plusButton.toolTip = "New Tab (\u{2318}T)"
+        plusButton = ToolbarButton(symbol: "plus", tip: "New Tab (\u{2318}T)",
+                                   target: self, action: #selector(newTabFromToolbar))
 
         urlField.delegate = self
         urlField.target = self
