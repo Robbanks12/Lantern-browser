@@ -31,13 +31,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private static let windowWidth: CGFloat = 600
-    /// Title row (drawn under the transparent titlebar) plus the compact tab row.
-    private static let chromeHeight: CGFloat = 70
+    /// Title row (drawn under the transparent titlebar) plus the icon tab row.
+    private static let chromeHeight: CGFloat = 80
     private static let bottomPadding: CGFloat = 56
 
     private let band = FlippedView()
     private let titleLabel = NSTextField(labelWithString: "")
-    private let hairline = NSBox()
     private let paneHost = FlippedView()
     private let helpButton = NSButton()
     private var paneButtons: [NSButton] = []
@@ -81,9 +80,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let content = FlippedView(frame: NSRect(x: 0, y: 0,
                                                 width: Self.windowWidth, height: 340))
 
-        // The band behind the title and tabs, a shade lighter than the pane below.
-        band.wantsLayer = true
-        band.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.05).cgColor
+        // No separate band or divider: the title and tab row sit directly on the
+        // window background, continuous with the pane below.
         content.addSubview(band)
 
         titleLabel.alignment = .center
@@ -96,12 +94,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             b.isBordered = false
             b.wantsLayer = true
             b.layer?.cornerRadius = 6
-            // Icon and label side by side, so each tab is a small chip rather than
-            // a tall tile.
-            b.imagePosition = .imageLeading
+            // Icon above its label, sized like Safari's tab items.
+            b.imagePosition = .imageAbove
+            b.alignment = .center
             b.imageScaling = .scaleProportionallyDown
             b.image = NSImage(systemSymbolName: pane.symbol, accessibilityDescription: pane.title)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 17, weight: .regular))
             b.tag = pane.rawValue
             b.target = self
             b.action = #selector(choosePane(_:))
@@ -110,9 +108,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             paneButtons.append(b)
             chipWidths.append(Self.chipWidth(for: pane.title))
         }
-
-        hairline.boxType = .separator
-        content.addSubview(hairline)
 
         content.addSubview(paneHost)
 
@@ -137,25 +132,24 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let size = content.bounds.size
         band.frame = NSRect(x: 0, y: 0, width: size.width, height: Self.chromeHeight)
         titleLabel.frame = NSRect(x: 0, y: 9, width: size.width, height: 17)
-        hairline.frame = NSRect(x: 0, y: Self.chromeHeight - 1, width: size.width, height: 1)
         paneHost.frame = NSRect(x: 0, y: Self.chromeHeight, width: size.width,
                                 height: max(0, size.height - Self.chromeHeight))
         helpButton.frame = NSRect(x: size.width - 46, y: size.height - 46, width: 28, height: 28)
 
-        // The chips form one centred row.
-        let gap: CGFloat = 8
+        // One centred row of icon-over-label items.
+        let gap: CGFloat = 6
         let total = chipWidths.reduce(0, +) + gap * CGFloat(max(0, chipWidths.count - 1))
         var x = max(12, (size.width - total) / 2)
         for (i, b) in paneButtons.enumerated() {
-            let w = chipWidths.indices.contains(i) ? chipWidths[i] : 90
-            b.frame = NSRect(x: x, y: 33, width: w, height: 26)
+            let w = chipWidths.indices.contains(i) ? chipWidths[i] : 74
+            b.frame = NSRect(x: x, y: 30, width: w, height: 44)
             x += w + gap
         }
     }
 
     private static func chipWidth(for title: String) -> CGFloat {
         let text = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width
-        return ceil(text) + 13 + 6 + 20   // icon, gap, padding
+        return max(58, ceil(text) + 18)
     }
 
     func windowDidResize(_ notification: Notification) {
@@ -278,11 +272,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             .showMemoryPill(jsonValue: Config.shared.showMemoryReadout) ? .on : .off
         b.row("Memory readout:", pill)
 
-        let doubleClick = NSButton(checkboxWithTitle: "Double-click empty space for a new tab",
-                                   target: self, action: #selector(toggleDoubleClickNewTab(_:)))
-        doubleClick.state = Config.shared.doubleClickTabStripForNewTab ? .on : .off
-        b.row("Tab strip:", doubleClick)
-
         b.note("Sleeping destroys a tab's web process and keeps its scroll position and history, "
                + "so a background tab costs a couple of KB instead of ~100 MB.")
         b.spacer(6)
@@ -301,6 +290,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                                   target: self, action: #selector(toggleCommandNumberTabs(_:)))
         numberKeys.state = Config.shared.useCommandNumberTabShortcuts ? .on : .off
         b.indented(numberKeys)
+
+        // Lives here rather than in its own row: it is a navigation nicety.
+        let doubleClick = NSButton(checkboxWithTitle: "Double-click empty space for a new tab",
+                                   target: self, action: #selector(toggleDoubleClickNewTab(_:)))
+        doubleClick.state = Config.shared.doubleClickTabStripForNewTab ? .on : .off
+        b.indented(doubleClick)
 
         b.note("With ⌘-click off it behaves like an ordinary click. Middle-click always "
                + "opens a background tab.")
