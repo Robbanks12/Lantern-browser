@@ -6,7 +6,7 @@
 </p>
 
 > **Status: work in progress.** Lantern is currently a work in progress and is
-> trying to reach feature and UI parity with Safari. Expect rough edges, missing
+> trying to reach feature and UI parity+ with Safari. Expect rough edges, missing
 > features, and interface changes between releases.
 
 A minimal macOS web browser. A single ~950 KB app bundle, no dependencies, no bundled
