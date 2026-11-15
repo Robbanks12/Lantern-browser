@@ -122,6 +122,7 @@ tools for newly opened tabs.
 | `restoreSessionOnLaunch` | `true` | |
 | `showMemoryReadout` | `true` | |
 | `enableDeveloperTools` | `true` | |
+| `doubleClickTabStripForNewTab` | `true` | double-clicking empty tab strip space opens a tab |
 
 Same folder holds `blocked-domains.txt` (one domain per line, `#` comments — add
 your own and restart), `history.json`, `bookmarks.json` and `session.json`. All

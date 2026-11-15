@@ -190,12 +190,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     /// Panes size themselves to their rows, the way Safari's preferences do, so a
     /// short pane never leaves a screenful of empty window under it.
+    /// Keep a fixed top edge: growing downward is what people expect from a
+    /// preferences window, so the bottom moves and the title stays put.
     private func resizeWindow(toContentHeight height: CGFloat) {
         guard let w = window else { return }
         var frame = w.frame
         if abs(frame.height - height) < 0.5 { return }
+        let top = frame.maxY
         frame.size.height = height
-        frame.origin.y = frame.maxY - height   // keep the top edge planted
+        frame.origin.y = top - height
         w.setFrame(frame, display: true)
         layoutChrome()
     }
@@ -266,6 +269,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         pill.state = Settings.shared
             .showMemoryPill(jsonValue: Config.shared.showMemoryReadout) ? .on : .off
         b.row("Memory readout:", pill)
+
+        let doubleClick = NSButton(checkboxWithTitle: "Double-click empty space for a new tab",
+                                   target: self, action: #selector(toggleDoubleClickNewTab(_:)))
+        doubleClick.state = Config.shared.doubleClickTabStripForNewTab ? .on : .off
+        b.row("Tab strip:", doubleClick)
 
         b.note("Sleeping destroys a tab's web process and keeps its scroll position and history, "
                + "so a background tab costs a couple of KB instead of ~100 MB.")
@@ -390,6 +398,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func toggleMemoryPill(_ sender: NSButton) {
         Settings.shared.setShowMemoryPill(sender.state == .on)
         AppDelegate.shared?.settingsDidChange()
+    }
+
+    @objc private func toggleDoubleClickNewTab(_ sender: NSButton) {
+        // Read on each click in the tab strip, so there is nothing live to notify.
+        Config.shared.doubleClickTabStripForNewTab = (sender.state == .on)
+        Config.shared.save()
     }
 
     // MARK: - Privacy

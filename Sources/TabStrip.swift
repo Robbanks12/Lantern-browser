@@ -540,15 +540,16 @@ final class TabStripView: NSView {
         layoutTabs()
     }
 
-    /// Double-clicking empty strip space opens a tab, as in every other browser. Single
-    /// clicks fall through so the window can still be dragged by its top bar.
+    /// Double-clicking empty strip space opens a tab, as in every other browser, unless
+    /// the setting is off. Single clicks fall through so the window can still be dragged
+    /// by its top bar.
     override func mouseDown(with event: NSEvent) {
         // Empty strip space only: a press that lands on a tab is handled by the item itself,
         // and the strip is no longer the window's titlebar, so double-clicking the top bar
         // keeps its standard macOS behaviour.
         let p = convert(event.locationInWindow, from: nil)
         let onTab = items.contains { $0.frame.contains(p) }
-        if event.clickCount == 2, !onTab {
+        if event.clickCount == 2, !onTab, Config.shared.doubleClickTabStripForNewTab {
             delegate?.tabStripDidRequestNewTab()
             return
         }
