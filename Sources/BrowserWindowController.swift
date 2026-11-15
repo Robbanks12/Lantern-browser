@@ -279,14 +279,20 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
         plusButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
         right -= bw + 2
 
-        // The download ring sits immediately left of New Tab, between it and the
-        // memory readout. It keeps its slot whether or not the pill is shown, so
-        // the two never overlap and the row does not shuffle when one appears.
+        // The download ring takes the same slot as every other toolbar button, so its
+        // padding matches the controls either side of it. The cluster closes up while
+        // it is hidden, so an idle window shows no empty slot.
         if !downloadIndicator.isHidden {
-            downloadIndicator.frame = NSRect(x: right - 22, y: (toolRow - 22) / 2, width: 22, height: 22)
-            right -= 22 + 2
+            downloadIndicator.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
+            right -= bw + 2
         }
 
+        shieldButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
+        right -= bw + 2
+        bookmarkButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
+        right -= bw + 2
+
+        // The readout sits at the head of the right-hand cluster, left of the star.
         if Settings.shared.showMemoryPill(jsonValue: Config.shared.showMemoryReadout) {
             statusPill.isHidden = false
             let w = max(64, min(190, statusPill.fittingWidth))
@@ -295,9 +301,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
         } else {
             statusPill.isHidden = true
         }
-        shieldButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
-        right -= bw + 2
-        bookmarkButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
+
+        // Leftmost item of the cluster: the readout when it is shown, else the star.
+        let clusterLeft = statusPill.isHidden ? bookmarkButton.frame.minX : statusPill.frame.minX
 
         // Reload belongs with the address bar, not with the page buttons. Safari leaves
         // a clear gap either side of that pair, so the slack is split evenly between the
@@ -306,11 +312,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
         let reloadGap: CGFloat = 8
         let minBarWidth: CGFloat = 220
         let navRight = forwardButton.frame.maxX
-        let available = bookmarkButton.frame.minX - navRight
+        let available = clusterLeft - navRight
         let slack = available - bw - reloadGap - minBarWidth
         let sideGap = max(14, min(toolbarWidth * 0.14, slack / 2))
 
-        let reloadX = bookmarkButton.frame.minX - sideGap - bw
+        let reloadX = clusterLeft - sideGap - bw
         reloadButton.frame = NSRect(x: reloadX, y: y, width: bw, height: bh)
 
         let urlX = navRight + sideGap
@@ -660,7 +666,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
         pop.animates = true
         pop.delegate = self
         pop.contentViewController = DownloadsPopoverController(nibName: nil, bundle: nil)
-        pop.show(relativeTo: downloadIndicator.bounds, of: downloadIndicator, preferredEdge: .minY)
+        // The toolbar row is flipped, so its maxY edge is the visual bottom: anchoring
+        // there makes the popover drop down out of the toolbar, as Safari's does.
+        pop.show(relativeTo: downloadIndicator.bounds, of: downloadIndicator, preferredEdge: .maxY)
         downloadsPopover = pop
     }
 

@@ -131,8 +131,16 @@ final class DownloadIndicator: NSView {
         addCursorRect(bounds, cursor: .pointingHand)
     }
 
+    /// A 16 point ring centred in the button's slot, so the glyph matches the size of
+    /// the icons on the controls beside it.
+    private var ringBounds: NSRect {
+        let side: CGFloat = 16
+        return NSRect(x: (bounds.width - side) / 2, y: (bounds.height - side) / 2,
+                      width: side, height: side)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        let r = bounds.insetBy(dx: 3, dy: 3)
+        let r = ringBounds
         guard isActive else { drawSettledGlyph(in: r); return }
         let center = NSPoint(x: r.midX, y: r.midY)
         let radius = min(r.width, r.height) / 2
