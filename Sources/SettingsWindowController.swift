@@ -1,9 +1,9 @@
 import AppKit
 
-/// The ⌘, window, laid out like Safari's preferences: a strip of icon tabs across the
-/// top, the pane's name as the window title, and one column of right-aligned labels
-/// with their controls. Only panes with real settings behind them are shown; every
-/// key in config.json appears somewhere here.
+/// The ⌘, window, laid out like Safari's preferences: a band of icon tabs under a
+/// centred pane name, and one column of right-aligned labels with their controls.
+/// Only panes with real settings behind them are shown; every key in config.json
+/// appears somewhere here.
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private enum Pane: Int, CaseIterable {
@@ -30,25 +30,35 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    private static let windowWidth: CGFloat = 620
-    private static let windowHeight: CGFloat = 560
-    private static let toolbarHeight: CGFloat = 80
+    private static let windowWidth: CGFloat = 600
+    /// Title row (drawn under the transparent titlebar) plus the icon tab row.
+    private static let chromeHeight: CGFloat = 100
+    private static let tabButtonSize = NSSize(width: 92, height: 62)
+    private static let bottomPadding: CGFloat = 56
 
-    private var paneButtons: [NSButton] = []
+    private let band = FlippedView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let hairline = NSBox()
     private let paneHost = FlippedView()
+    private let helpButton = NSButton()
+    private var paneButtons: [NSButton] = []
     private var currentPane: Pane = .general
 
     /// Rebuilt on every pane switch, so it is only a weak reference to the live field.
     private weak var homepageField: NSTextField?
-    private var enginePopup: NSPopUpButton?
-    private var hibernatePopup: NSPopUpButton?
 
     convenience init() {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: SettingsWindowController.windowWidth,
-                                             height: SettingsWindowController.windowHeight),
-                         styleMask: [.titled, .closable],
+                                             height: 340),
+                         styleMask: [.titled, .closable, .fullSizeContentView],
                          backing: .buffered, defer: false)
         w.title = Pane.general.title
+        // The pane name is drawn by us, centred, so it reads the same on every macOS
+        // version instead of following the titlebar's own alignment rules.
+        w.titleVisibility = .hidden
+        w.titlebarAppearsTransparent = true
+        // No line across the band where the titlebar would normally end.
+        w.titlebarSeparatorStyle = .none
         w.backgroundColor = .windowBackgroundColor
         // The controller keeps this window alive and shows it again on the next ⌘,.
         w.isReleasedWhenClosed = false
@@ -69,66 +79,79 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func buildContent() {
         guard let w = window else { return }
         let content = FlippedView(frame: NSRect(x: 0, y: 0,
-                                                width: Self.windowWidth, height: Self.windowHeight))
-        content.autoresizingMask = [.width, .height]
+                                                width: Self.windowWidth, height: 340))
 
-        // The icon strip sits on a slightly lighter band, like Safari's.
-        let toolbar = FlippedView(frame: NSRect(x: 0, y: 0,
-                                                width: Self.windowWidth, height: Self.toolbarHeight))
-        toolbar.wantsLayer = true
-        toolbar.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.05).cgColor
-        toolbar.autoresizingMask = [.width]
+        // The band behind the title and tabs, a shade lighter than the pane below.
+        band.wantsLayer = true
+        band.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.05).cgColor
+        content.addSubview(band)
 
-        let count = CGFloat(Pane.allCases.count)
-        let buttonWidth: CGFloat = 88
-        let spacing: CGFloat = 10
-        let total = count * buttonWidth + (count - 1) * spacing
-        var x = (Self.windowWidth - total) / 2
+        titleLabel.alignment = .center
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = .labelColor
+        band.addSubview(titleLabel)
+
         for pane in Pane.allCases {
-            let b = NSButton(frame: NSRect(x: x, y: 7, width: buttonWidth, height: 66))
+            let b = NSButton(frame: .zero)
             b.isBordered = false
             b.wantsLayer = true
-            b.layer?.cornerRadius = 7
+            b.layer?.cornerRadius = 8
             b.imagePosition = .imageAbove
             b.alignment = .center
             b.imageScaling = .scaleProportionallyDown
             b.image = NSImage(systemSymbolName: pane.symbol, accessibilityDescription: pane.title)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 21, weight: .regular))
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 20, weight: .regular))
             b.tag = pane.rawValue
             b.target = self
             b.action = #selector(choosePane(_:))
             b.toolTip = pane.title
-            toolbar.addSubview(b)
+            band.addSubview(b)
             paneButtons.append(b)
-            x += buttonWidth + spacing
         }
 
-        let hairline = NSBox(frame: NSRect(x: 0, y: Self.toolbarHeight - 1,
-                                           width: Self.windowWidth, height: 1))
         hairline.boxType = .separator
-        hairline.autoresizingMask = [.width]
-        toolbar.addSubview(hairline)
-        content.addSubview(toolbar)
+        content.addSubview(hairline)
 
-        paneHost.frame = NSRect(x: 0, y: Self.toolbarHeight, width: Self.windowWidth,
-                                height: Self.windowHeight - Self.toolbarHeight)
-        paneHost.autoresizingMask = [.width, .height]
         content.addSubview(paneHost)
 
         // The round help button in the bottom-right corner, as in Safari's panes.
-        let help = NSButton(frame: NSRect(x: Self.windowWidth - 46,
-                                          y: Self.windowHeight - 48, width: 28, height: 28))
-        help.bezelStyle = .circular
-        help.title = "?"
-        help.font = .systemFont(ofSize: 12, weight: .semibold)
-        help.target = self
-        help.action = #selector(showHelp(_:))
-        help.toolTip = "Where these settings are stored"
-        help.autoresizingMask = [.minXMargin]
-        content.addSubview(help)
+        helpButton.bezelStyle = .circular
+        helpButton.title = "?"
+        helpButton.font = .systemFont(ofSize: 12, weight: .semibold)
+        helpButton.target = self
+        helpButton.action = #selector(showHelp(_:))
+        helpButton.toolTip = "Where these settings are stored"
+        content.addSubview(helpButton)
 
         w.contentView = content
         w.center()
+        layoutChrome()
+    }
+
+    /// Everything in the window is positioned here, so a pane change can resize the
+    /// window and the band, tabs and help button follow without autoresizing guesses.
+    private func layoutChrome() {
+        guard let content = window?.contentView else { return }
+        let size = content.bounds.size
+        band.frame = NSRect(x: 0, y: 0, width: size.width, height: Self.chromeHeight)
+        titleLabel.frame = NSRect(x: 0, y: 9, width: size.width, height: 17)
+        hairline.frame = NSRect(x: 0, y: Self.chromeHeight - 1, width: size.width, height: 1)
+        paneHost.frame = NSRect(x: 0, y: Self.chromeHeight, width: size.width,
+                                height: max(0, size.height - Self.chromeHeight))
+        helpButton.frame = NSRect(x: size.width - 46, y: size.height - 46, width: 28, height: 28)
+
+        let tabSize = Self.tabButtonSize
+        let count = CGFloat(paneButtons.count)
+        let gap = max(12, (size.width - count * tabSize.width) / (count + 1))
+        var x = gap
+        for b in paneButtons {
+            b.frame = NSRect(x: x, y: 31, width: tabSize.width, height: tabSize.height)
+            x += tabSize.width + gap
+        }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        layoutChrome()
     }
 
     @objc private func choosePane(_ sender: NSButton) {
@@ -140,28 +163,41 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func selectPane(_ pane: Pane) {
         currentPane = pane
         window?.title = pane.title
+        titleLabel.stringValue = pane.title
         for b in paneButtons {
             let selected = b.tag == pane.rawValue
             b.layer?.backgroundColor = selected
-                ? NSColor.labelColor.withAlphaComponent(0.1).cgColor
+                ? NSColor.labelColor.withAlphaComponent(0.12).cgColor
                 : NSColor.clear.cgColor
-            b.contentTintColor = selected ? .controlAccentColor : .secondaryLabelColor
             let color: NSColor = selected ? .controlAccentColor : .secondaryLabelColor
+            b.contentTintColor = color
             b.attributedTitle = NSAttributedString(
                 string: Pane(rawValue: b.tag)?.title ?? "",
                 attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: color])
         }
         paneHost.subviews.forEach { $0.removeFromSuperview() }
         homepageField = nil
-        enginePopup = nil
-        hibernatePopup = nil
+        let builder = PaneBuilder(host: paneHost, width: window?.contentView?.bounds.width ?? Self.windowWidth)
         switch pane {
-        case .general: buildGeneral(in: paneHost)
-        case .tabs: buildTabs(in: paneHost)
-        case .search: buildSearch(in: paneHost)
-        case .privacy: buildPrivacy(in: paneHost)
-        case .developer: buildDeveloper(in: paneHost)
+        case .general: buildGeneral(builder)
+        case .tabs: buildTabs(builder)
+        case .search: buildSearch(builder)
+        case .privacy: buildPrivacy(builder)
+        case .developer: buildDeveloper(builder)
         }
+        resizeWindow(toContentHeight: Self.chromeHeight + builder.maxY + Self.bottomPadding)
+    }
+
+    /// Panes size themselves to their rows, the way Safari's preferences do, so a
+    /// short pane never leaves a screenful of empty window under it.
+    private func resizeWindow(toContentHeight height: CGFloat) {
+        guard let w = window else { return }
+        var frame = w.frame
+        if abs(frame.height - height) < 0.5 { return }
+        frame.size.height = height
+        frame.origin.y = frame.maxY - height   // keep the top edge planted
+        w.setFrame(frame, display: true)
+        layoutChrome()
     }
 
     /// Brings the window up for ⌘, (and for the menu item, which uses the same action).
@@ -170,7 +206,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         // Rebuild so a hand-edited config.json or the toolbar shield shows up here.
         selectPane(currentPane)
         showWindow(nil)
-        window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -188,9 +223,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - Panes
 
-    private func buildGeneral(in host: NSView) {
-        let b = PaneBuilder(host: host, width: Self.windowWidth)
-
+    private func buildGeneral(_ b: PaneBuilder) {
         let opens = NSPopUpButton(frame: .zero, pullsDown: false)
         opens.addItems(withTitles: ["A new window", "All windows from last session"])
         opens.selectItem(at: Config.shared.restoreSessionOnLaunch ? 1 : 0)
@@ -212,20 +245,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         setCurrent.bezelStyle = .rounded
         b.indented(setCurrent)
 
-        b.spacer(10)
         b.note("New tabs open the homepage when one is set. Blank keeps the native start page.")
     }
 
-    private func buildTabs(in host: NSView) {
-        let b = PaneBuilder(host: host, width: Self.windowWidth)
-
+    private func buildTabs(_ b: PaneBuilder) {
         let sleep = NSPopUpButton(frame: .zero, pullsDown: false)
         sleep.menu = hibernateMenu()
         syncHibernate(sleep)
         sleep.target = self
         sleep.action = #selector(chooseHibernate(_:))
         b.row("Sleep background tabs:", sleep)
-        hibernatePopup = sleep
 
         let pressure = NSButton(checkboxWithTitle: "Sleep them immediately when memory is tight",
                                 target: self, action: #selector(toggleMemoryPressure(_:)))
@@ -238,35 +267,27 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             .showMemoryPill(jsonValue: Config.shared.showMemoryReadout) ? .on : .off
         b.row("Memory readout:", pill)
 
-        b.spacer(4)
         b.note("Sleeping destroys a tab's web process and keeps its scroll position and history, "
                + "so a background tab costs a couple of KB instead of ~100 MB.")
     }
 
-    private func buildSearch(in host: NSView) {
-        let b = PaneBuilder(host: host, width: Self.windowWidth)
-
+    private func buildSearch(_ b: PaneBuilder) {
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
         buildEngineMenu(into: popup)
         popup.target = self
         popup.action = #selector(selectEngine(_:))
         b.row("Search engine:", popup)
-        enginePopup = popup
 
-        b.spacer(4)
         b.note("Engines marked Requires sign-in open their sign-in page first. "
                + "The choice applies to the very next search.")
     }
 
-    private func buildPrivacy(in host: NSView) {
-        let b = PaneBuilder(host: host, width: Self.windowWidth)
-
+    private func buildPrivacy(_ b: PaneBuilder) {
         let block = NSButton(checkboxWithTitle: "Block ads and trackers",
                              target: self, action: #selector(toggleBlocking(_:)))
         block.state = Config.shared.blockAdsAndTrackers ? .on : .off
         b.row("Website tracking:", block)
 
-        b.spacer(2)
         b.note("Open tabs reload so the network rules take effect.")
 
         let data = NSButton(title: "Manage Website Data…", target: self,
@@ -274,19 +295,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         data.bezelStyle = .rounded
         b.row("Website data:", data, height: 26)
 
-        b.spacer(2)
         b.note("Clearing removes cookies and cached files, and signs you out of sites.")
     }
 
-    private func buildDeveloper(in host: NSView) {
-        let b = PaneBuilder(host: host, width: Self.windowWidth)
-
+    private func buildDeveloper(_ b: PaneBuilder) {
         let tools = NSButton(checkboxWithTitle: "Enable Inspect Element on pages",
                              target: self, action: #selector(toggleDeveloperTools(_:)))
         tools.state = Config.shared.enableDeveloperTools ? .on : .off
         b.row("Web Inspector:", tools)
 
-        b.spacer(4)
         b.note("Applies to tabs opened afterwards. Right-clicking a page then offers Inspect Element.")
     }
 
@@ -397,8 +414,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - Search engine picker
 
-    /// One dropdown for every engine. Groups appear as disabled separator headers,
-    /// so the full catalog fits in a single control instead of a scrolling list.
+    /// One dropdown for every engine. Group names are disabled separator items, so
+    /// the whole catalog fits in one control. Items carry the engine id in
+    /// `representedObject`: the group headers share tag 0, so tags cannot identify an
+    /// engine (Google is index 0) without the header winning the lookup.
     private func buildEngineMenu(into popup: NSPopUpButton) {
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -409,9 +428,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             header.isEnabled = false
             menu.addItem(header)
             for engine in engines {
-                guard let idx = SearchEngines.all.firstIndex(where: { $0.id == engine.id }) else { continue }
                 let item = NSMenuItem(title: engine.name, action: nil, keyEquivalent: "")
-                item.tag = idx
+                item.tag = 1
+                item.representedObject = engine.id
                 item.image = Self.tileIcon(letter: String(engine.name.prefix(1)))
                 if engine.requiresLogin {
                     let titled = NSMutableAttributedString(
@@ -427,8 +446,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             }
         }
         popup.menu = menu
-        if let idx = SearchEngines.all.firstIndex(where: { $0.id == Config.shared.searchEngine }),
-           let item = popup.itemArray.first(where: { $0.tag == idx }) {
+        if let item = popup.itemArray.first(where: {
+            ($0.representedObject as? String) == Config.shared.searchEngine
+        }) {
             popup.select(item)
         } else {
             // A hand-written template with no matching engine: nothing selected.
@@ -437,11 +457,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func selectEngine(_ sender: NSPopUpButton) {
-        guard let item = sender.selectedItem,
-              SearchEngines.all.indices.contains(item.tag) else { return }
+        guard let id = sender.selectedItem?.representedObject as? String,
+              SearchEngines.engine(id: id) != nil else { return }
         // Persists and takes effect on the very next search: resolve() reads the
         // live setting, so no window needs to reload or relayout.
-        Config.shared.setSearchEngine(SearchEngines.all[item.tag].id)
+        Config.shared.setSearchEngine(id)
     }
 
     /// Letter tile in the tab-fallback style: no network, no cache, no async.
@@ -489,9 +509,12 @@ private final class PaneBuilder {
     private let width: CGFloat
     private var y: CGFloat = 26
 
-    private var labelRight: CGFloat { 296 }
-    private var controlX: CGFloat { 308 }
-    private var controlWidth: CGFloat { width - controlX - 24 }
+    /// Where the last row ended, so the window can be sized to fit the pane.
+    var maxY: CGFloat { y }
+
+    private var labelRight: CGFloat { 272 }
+    private var controlX: CGFloat { 286 }
+    private var controlWidth: CGFloat { width - controlX - 22 }
 
     init(host: NSView, width: CGFloat) {
         self.host = host
@@ -503,7 +526,7 @@ private final class PaneBuilder {
         label.alignment = .right
         label.font = .systemFont(ofSize: 13)
         label.lineBreakMode = .byTruncatingTail
-        label.frame = NSRect(x: 24, y: y + (height - 17) / 2, width: labelRight - 24, height: 17)
+        label.frame = NSRect(x: 22, y: y + (height - 17) / 2, width: labelRight - 22, height: 17)
         host.addSubview(label)
         control.frame = NSRect(x: controlX, y: y, width: controlWidth, height: height)
         host.addSubview(control)
@@ -527,7 +550,7 @@ private final class PaneBuilder {
             forBounds: NSRect(x: 0, y: 0, width: controlWidth, height: .greatestFiniteMagnitude)).height ?? 16
         note.frame = NSRect(x: controlX, y: y, width: controlWidth, height: h)
         host.addSubview(note)
-        y += h + 8
+        y += h + 10
     }
 
     func spacer(_ h: CGFloat) { y += h }
