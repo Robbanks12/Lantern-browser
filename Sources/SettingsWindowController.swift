@@ -86,7 +86,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         var x = (Self.windowWidth - total) / 2
         for pane in Pane.allCases {
             let b = NSButton(frame: NSRect(x: x, y: 7, width: buttonWidth, height: 66))
-            b.bordered = false
+            b.isBordered = false
             b.wantsLayer = true
             b.layer?.cornerRadius = 7
             b.imagePosition = .imageAbove
