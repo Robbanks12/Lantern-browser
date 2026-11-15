@@ -113,9 +113,18 @@ final class Tab: NSObject {
 
         let cfg = providedConfiguration ?? WebKitEnv.makeConfiguration(private: isPrivate)
         providedConfiguration = nil
-        let wv = WKWebView(frame: .zero, configuration: cfg)
+        let wv = BrowserWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
         wv.uiDelegate = self
+        // WebKit's context-menu download items do nothing on their own: they carry no
+        // URL. The view resolves the clicked element and hands it back here, where it
+        // becomes a download like any other -- same folder, list and popover.
+        wv.onContextDownload = { [weak wv] url in
+            guard let wv else { return }
+            wv.startDownload(using: URLRequest(url: url)) { download in
+                download.delegate = Downloads.shared
+            }
+        }
         wv.allowsBackForwardNavigationGestures = true
         wv.allowsMagnification = true
         wv.allowsLinkPreview = true
