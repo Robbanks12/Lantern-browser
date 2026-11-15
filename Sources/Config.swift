@@ -18,6 +18,14 @@ final class Config {
     var restoreSessionOnLaunch: Bool = true
     var showMemoryReadout: Bool = true
     var enableDeveloperTools: Bool = true
+    /// Double-clicking empty tab-strip space opens a new tab.
+    var doubleClickTabStripForNewTab: Bool = true
+    /// ⌘-clicking a link opens it in a new tab rather than loading it in place.
+    var commandClickOpensNewTab: Bool = true
+    /// A link opened in a new tab becomes the active tab.
+    var activateNewTabsOnOpen: Bool = false
+    /// The Window menu's ⌘-1 … ⌘-9 tab shortcuts are live.
+    var useCommandNumberTabShortcuts: Bool = true
 
     static var supportDir: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -54,6 +62,10 @@ final class Config {
         if let v = d["restoreSessionOnLaunch"] as? Bool { restoreSessionOnLaunch = v }
         if let v = d["showMemoryReadout"] as? Bool { showMemoryReadout = v }
         if let v = d["enableDeveloperTools"] as? Bool { enableDeveloperTools = v }
+        if let v = d["doubleClickTabStripForNewTab"] as? Bool { doubleClickTabStripForNewTab = v }
+        if let v = d["commandClickOpensNewTab"] as? Bool { commandClickOpensNewTab = v }
+        if let v = d["activateNewTabsOnOpen"] as? Bool { activateNewTabsOnOpen = v }
+        if let v = d["useCommandNumberTabShortcuts"] as? Bool { useCommandNumberTabShortcuts = v }
     }
 
     /// Called by the Settings picker. Keeps the legacy template in sync so older
@@ -87,6 +99,10 @@ final class Config {
             "restoreSessionOnLaunch": restoreSessionOnLaunch,
             "showMemoryReadout": showMemoryReadout,
             "enableDeveloperTools": enableDeveloperTools,
+            "doubleClickTabStripForNewTab": doubleClickTabStripForNewTab,
+            "commandClickOpensNewTab": commandClickOpensNewTab,
+            "activateNewTabsOnOpen": activateNewTabsOnOpen,
+            "useCommandNumberTabShortcuts": useCommandNumberTabShortcuts,
         ]
         if let data = try? JSONSerialization.data(withJSONObject: d, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: fileURL, options: .atomic)

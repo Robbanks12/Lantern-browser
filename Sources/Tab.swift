@@ -267,11 +267,14 @@ extension Tab: WKNavigationDelegate {
             return
         }
         // Cmd-click / middle-click opens a background tab, like every other browser.
+        // Middle-click always does; ⌘-click follows the Navigation setting, so with it
+        // off the click falls through and the link loads in this tab.
         if action.navigationType == .linkActivated {
             let flags = action.modifierFlags
-            if flags.contains(.command) || action.buttonNumber == 2 {
-                _ = delegate?.tab(self, openNewTabWith: url, configuration: nil,
-                                  activate: flags.contains(.shift))
+            let commandClick = flags.contains(.command) && Config.shared.commandClickOpensNewTab
+            if commandClick || action.buttonNumber == 2 {
+                let activate = flags.contains(.shift) || Config.shared.activateNewTabsOnOpen
+                _ = delegate?.tab(self, openNewTabWith: url, configuration: nil, activate: activate)
                 decisionHandler(.cancel)
                 return
             }

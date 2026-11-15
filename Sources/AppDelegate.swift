@@ -1,7 +1,7 @@
 import AppKit
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     static var shared: AppDelegate?
 
     private var controllers: [BrowserWindowController] = []
@@ -371,5 +371,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Refresh the history submenu lazily when it is opened, not on every page load.
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === historyMenu { rebuildHistoryMenu() }
+    }
+
+    /// The ⌘-1 … ⌘-9 tab shortcuts follow their Settings checkbox.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(selectTabByNumber(_:)) {
+            return Config.shared.useCommandNumberTabShortcuts
+        }
+        return true
     }
 }
