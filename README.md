@@ -1,9 +1,18 @@
-# Lantern
+# Lantern 🏮
 
-A minimal macOS web browser. A single ~900 KB app bundle, no dependencies, no bundled
+<p>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform: macOS" />
+</p>
+
+> **Status: work in progress.** Lantern is currently a work in progress and is
+> trying to reach feature and UI parity with Safari. Expect rough edges, missing
+> features, and interface changes between releases.
+
+A minimal macOS web browser. A single ~950 KB app bundle, no dependencies, no bundled
 engine, no background services.
 
-Lantern renders with the WebKit already resident in macOS, It prioritizes low memory usage, native speed, and local privacy without the bloat of background updaters, telemetry daemons, or extension hosts.
+Lantern renders with the WebKit already resident in macOS, It prioritizes low memory usage, native speed, and local privacy without the bloat of background updaters, telemetry daemons, or extension host
 
 ## What actually makes it light
 
@@ -122,10 +131,6 @@ tools for newly opened tabs.
 | `restoreSessionOnLaunch` | `true` | |
 | `showMemoryReadout` | `true` | |
 | `enableDeveloperTools` | `true` | |
-| `doubleClickTabStripForNewTab` | `true` | double-clicking empty tab strip space opens a tab |
-| `commandClickOpensNewTab` | `true` | off means ⌘-click behaves like a plain click |
-| `activateNewTabsOnOpen` | `false` | a link opened in a new tab becomes active |
-| `useCommandNumberTabShortcuts` | `true` | ⌘-1 through ⌘-9 switch tabs |
 
 Same folder holds `blocked-domains.txt` (one domain per line, `#` comments — add
 your own and restart), `history.json`, `bookmarks.json` and `session.json`. All
@@ -151,6 +156,10 @@ plain files; nothing is a database.
 
 ## Known limits
 
+- **Work in progress.** Lantern is currently a work in progress and is trying to
+  reach feature and UI parity with Safari. Feature and UI parity with Safari is the
+  goal, not the current state. Things you expect from Safari may be missing,
+  incomplete, or behave differently for now.
 - **Not a new engine.** Site compatibility is Safari's. The rare site that only
   works in Chrome will not work here.
 - **No extension support.** Ad blocking is built in; anything else is not available.
