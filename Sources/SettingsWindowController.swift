@@ -221,7 +221,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         } else if Self.isHomepageValue(raw) {
             Config.shared.homepage = raw
         } else {
-            NSBeep()
+            NSSound.beep()
             sender.stringValue = Config.shared.homepage
             return
         }
