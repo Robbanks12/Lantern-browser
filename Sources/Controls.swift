@@ -109,15 +109,59 @@ final class StatusPill: NSView {
     }
 }
 
-/// Determinate download ring for the toolbar. Hidden unless something is downloading,
-/// so it costs nothing at rest. No timer: progress arrives from WKDownload's KVO.
+/// Download control for the toolbar: a ring while a transfer runs, a download glyph
+/// once everything has finished but the list still has entries. Hidden when the list
+/// is empty, so it costs nothing at rest. No timer: progress arrives from WKDownload's
+/// KVO. Clicking it opens the downloads popover, so it behaves like a button.
 final class DownloadIndicator: NSView {
     var progress: Double = 0 { didSet { needsDisplay = true } }
+    /// True while a transfer runs. False draws the settled glyph instead of the ring.
+    var isActive = true { didSet { needsDisplay = true } }
+    var onClick: (() -> Void)?
 
     override var isFlipped: Bool { true }
 
+    /// Same hover outline as the toolbar buttons either side of it.
+    private var hovering = false { didSet { needsDisplay = true } }
+    private var trackingAreaRef: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingAreaRef { removeTrackingArea(trackingAreaRef) }
+        let t = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow],
+                              owner: self, userInfo: nil)
+        addTrackingArea(t)
+        trackingAreaRef = t
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+
+    /// A toolbar control, so the first click counts even while the window is inactive.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// A ring does not look like a button on its own; the pointing hand says it is one.
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    /// A 16 point ring centred in the button's slot, so the glyph matches the size of
+    /// the icons on the controls beside it.
+    private var ringBounds: NSRect {
+        let side: CGFloat = 16
+        return NSRect(x: (bounds.width - side) / 2, y: (bounds.height - side) / 2,
+                      width: side, height: side)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        let r = bounds.insetBy(dx: 3, dy: 3)
+        if hovering {
+            NSColor.quaternaryLabelColor.withAlphaComponent(0.28).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+        }
+        let r = ringBounds
+        guard isActive else { drawSettledGlyph(in: r); return }
         let center = NSPoint(x: r.midX, y: r.midY)
         let radius = min(r.width, r.height) / 2
 
@@ -134,6 +178,30 @@ final class DownloadIndicator: NSView {
         NSColor.controlAccentColor.setStroke()
         arc.lineWidth = 2
         arc.stroke()
+    }
+
+    /// Everything finished, list not yet cleared: the same ring, closed, with the arrow
+    /// that means "downloads". Drawn as paths so it needs no image tinting and stays
+    /// sharp at any backing scale.
+    private func drawSettledGlyph(in rect: NSRect) {
+        NSColor.secondaryLabelColor.setStroke()
+
+        let ring = NSBezierPath(ovalIn: rect.insetBy(dx: 0.8, dy: 0.8))
+        ring.lineWidth = 1.5
+        ring.stroke()
+
+        let cx = rect.midX
+        let cy = rect.midY
+        let arrow = NSBezierPath()
+        arrow.move(to: NSPoint(x: cx, y: cy - 5))
+        arrow.line(to: NSPoint(x: cx, y: cy + 2.5))
+        arrow.move(to: NSPoint(x: cx - 3.5, y: cy - 1))
+        arrow.line(to: NSPoint(x: cx, y: cy + 3.5))
+        arrow.line(to: NSPoint(x: cx + 3.5, y: cy - 1))
+        arrow.lineWidth = 1.5
+        arrow.lineCapStyle = .round
+        arrow.lineJoinStyle = .round
+        arrow.stroke()
     }
 }
 

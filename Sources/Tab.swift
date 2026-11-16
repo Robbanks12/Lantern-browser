@@ -54,6 +54,11 @@ final class Tab: NSObject {
     /// exact configuration it handed us, and it performs the navigation itself.
     private var providedConfiguration: WKWebViewConfiguration?
     private var webKitWillLoad = false
+    /// True for a tab WebKit created for another tab's window.open / target=_blank.
+    private let isOpenerTarget: Bool
+    /// Set once a navigation actually commits. A download never commits, so a
+    /// still-false value means this tab exists only to host the transfer.
+    private var hasCommittedNavigation = false
     private var observations: [NSKeyValueObservation] = []
     private static var faviconCache: [String: NSImage] = [:]
 
@@ -71,6 +76,7 @@ final class Tab: NSObject {
         self.pendingURL = url
         self.providedConfiguration = configuration
         self.webKitWillLoad = (configuration != nil)
+        self.isOpenerTarget = (configuration != nil)
         super.init()
         if let url { self.favicon = Tab.faviconCache[url.host ?? ""] }
     }
@@ -79,6 +85,7 @@ final class Tab: NSObject {
     init(saved: SavedTab, delegate: TabDelegate?) {
         self.isPrivate = false
         self.delegate = delegate
+        self.isOpenerTarget = false
         self.url = URL(string: saved.url)
         self.title = saved.title
         self.savedInteractionState = saved.interactionState
@@ -106,9 +113,18 @@ final class Tab: NSObject {
 
         let cfg = providedConfiguration ?? WebKitEnv.makeConfiguration(private: isPrivate)
         providedConfiguration = nil
-        let wv = WKWebView(frame: .zero, configuration: cfg)
+        let wv = BrowserWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
         wv.uiDelegate = self
+        // WebKit's context-menu download items do nothing on their own: they carry no
+        // URL. The view resolves the clicked element and hands it back here, where it
+        // becomes a download like any other -- same folder, list and popover.
+        wv.onContextDownload = { [weak wv] url in
+            guard let wv else { return }
+            wv.startDownload(using: URLRequest(url: url)) { download in
+                download.delegate = Downloads.shared
+            }
+        }
         wv.allowsBackForwardNavigationGestures = true
         wv.allowsMagnification = true
         wv.allowsLinkPreview = true
@@ -266,6 +282,17 @@ extension Tab: WKNavigationDelegate {
             decisionHandler(.cancel)
             return
         }
+        // An explicit download intent (download attribute, direct binary link)
+        // wins over everything below: allowing it would navigate this tab to a
+        // URL WebKit cannot show, and the ⌘-click branch would hand it a fresh
+        // tab with nothing in it. Downloads.shared takes the transfer instead.
+        if action.shouldPerformDownload {
+            decisionHandler(.download)
+            // A target=_blank link to a file arrives in a tab of its own; that tab
+            // must not be left behind empty once the transfer has taken over.
+            retireIfBlankOpenerTarget()
+            return
+        }
         // Cmd-click / middle-click opens a background tab, like every other browser.
         // Middle-click always does; ⌘-click follows the Navigation setting, so with it
         // off the click falls through and the link loads in this tab.
@@ -282,12 +309,43 @@ extension Tab: WKNavigationDelegate {
         // Ordinary web navigation: load it here. NavigationPolicy keeps WebKit
         // from offering the URL to an installed app first, which is what made
         // clicks on links like xbox.com leave the browser and fail with 102.
-        // Downloads and redirects are unaffected: they are decided by the
-        // response policy that runs after this one allows the action.
+        // Redirects are unaffected: any download the server answers with is
+        // caught by the response policy below, which runs after this allows it.
         decisionHandler(NavigationPolicy.decision(for: url))
     }
 
+    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        // Without this, a link to a file WebKit cannot render (zip, dmg, pdf
+        // without a viewer, ...) navigates the tab to a dead URL instead of
+        // downloading. Hand the bytes to Downloads.shared via didBecomeDownload.
+        // Main frame only: a subframe answering an odd MIME type is page content
+        // gone weird, not a file the user asked for.
+        if response.isForMainFrame && !response.canShowMIMEType {
+            decisionHandler(.download)
+            retireIfBlankOpenerTarget()
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    /// A target=_blank or window.open link to a file is handed to us as a brand new
+    /// tab, which WebKit then turns into a download before anything loads in it. That
+    /// tab would stay empty for good, so ask the window to drop it -- but only ever a
+    /// tab that has never committed a page, so an ordinary blank tab is untouched.
+    private func retireIfBlankOpenerTarget() {
+        guard isOpenerTarget, !hasCommittedNavigation else { return }
+        // Off the policy callback: closing a tab there would dissolve the web view
+        // WebKit is still using to finish deciding this navigation. The download
+        // itself is owned by Downloads.shared, the way it is for any closed tab.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasCommittedNavigation else { return }
+            self.delegate?.tabRequestsClose(self)
+        }
+    }
+
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        hasCommittedNavigation = true
         delegate?.tabDidChangeState(self)
     }
 

@@ -45,6 +45,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     /// Rebuilt on every pane switch, so it is only a weak reference to the live field.
     private weak var homepageField: NSTextField?
+    /// Same for the download-folder popup, re-synced after the Choose panel closes.
+    private weak var downloadPopup: NSPopUpButton?
 
     convenience init() {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: SettingsWindowController.windowWidth,
@@ -251,6 +253,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         b.indented(setCurrent)
 
         b.note("New tabs open the homepage when one is set. Blank keeps the native start page.")
+        b.spacer(10)
+
+        // Safari puts the download folder below the home page block, in its own group.
+        let downloads = NSPopUpButton(frame: .zero, pullsDown: false)
+        syncDownloadPopup(downloads)
+        downloads.target = self
+        downloads.action = #selector(chooseDownloadFolder(_:))
+        b.row("File download location:", downloads)
+        downloadPopup = downloads
     }
 
     private func buildTabs(_ b: PaneBuilder) {
@@ -371,6 +382,49 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
         Config.shared.save()
         sender.stringValue = Config.shared.homepage
+    }
+
+    /// The folder item shows its icon and name, like Safari; "Choose…" opens the
+    /// directory picker. Rebuilt from Config each time, so cancel or a hand-edited
+    /// config.json can never leave a stale row behind.
+    private func syncDownloadPopup(_ popup: NSPopUpButton) {
+        popup.removeAllItems()
+        let url = Config.shared.downloadDirectoryURL
+        popup.addItem(withTitle: url.lastPathComponent)
+        if let item = popup.lastItem {
+            // The folder's own icon, the way Safari shows Downloads.
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            icon.size = NSSize(width: 16, height: 16)
+            item.image = icon
+        }
+        popup.addItem(withTitle: "Choose…")
+        popup.selectItem(at: 0)
+        popup.toolTip = url.path
+    }
+
+    @objc private func chooseDownloadFolder(_ sender: NSPopUpButton) {
+        // The folder item itself is display-only; only "Choose…" acts. Re-select it
+        // rather than rebuilding the menu inside its own action.
+        guard sender.indexOfSelectedItem == sender.numberOfItems - 1, let w = window else {
+            sender.selectItem(at: 0)
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = Config.shared.downloadDirectoryURL
+        panel.prompt = "Choose"
+        panel.beginSheetModal(for: w) { [weak self] r in
+            guard r == .OK, let url = panel.urls.first else {
+                if let p = self?.downloadPopup { self?.syncDownloadPopup(p) }
+                return
+            }
+            Config.shared.downloadDirectory = url.path
+            Config.shared.save()
+            if let p = self?.downloadPopup { self?.syncDownloadPopup(p) }
+        }
     }
 
     private static func isHomepageValue(_ s: String) -> Bool {

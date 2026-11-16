@@ -8,6 +8,11 @@ NAME="Lantern"
 BUNDLE_ID="com.lantern.browser"
 VERSION="1.0"
 DEST="${1:-.}"
+# The one folder Lantern writes to. Inert while the app is unsandboxed -- and it is
+# deliberately unsandboxed, because the sandbox would cut off the libproc accounting
+# behind the memory readout and move config.json into a container. Signed in anyway so
+# enabling the sandbox later grants Downloads without a TCC prompt.
+ENTITLEMENTS="Resources/Lantern.entitlements"
 
 echo "==> Compiling ($(ls Sources/*.swift | wc -l | tr -d ' ') files)"
 rm -rf "$APP"
@@ -44,6 +49,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSCameraUsageDescription</key><string>Websites you allow can use the camera.</string>
   <key>NSMicrophoneUsageDescription</key><string>Websites you allow can use the microphone.</string>
   <key>NSLocationWhenInUseUsageDescription</key><string>Websites you allow can use your location.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>Lantern saves the files you download to your Downloads folder.</string>
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsArbitraryLoads</key><true/></dict>
   <key>CFBundleURLTypes</key>
@@ -71,7 +77,8 @@ PLIST
 # Generate a simple app icon from an SF Symbol-ish drawing.
 if [ -x /usr/bin/python3 ]; then python3 tools/make_icon.py "$APP/Contents/Resources/AppIcon.icns" || true; fi
 
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "   (ad-hoc signing skipped)"
+codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP" >/dev/null 2>&1 \
+  || echo "   (ad-hoc signing skipped)"
 touch "$APP"
 
 if [ "$DEST" != "." ]; then

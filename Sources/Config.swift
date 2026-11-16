@@ -26,6 +26,9 @@ final class Config {
     var activateNewTabsOnOpen: Bool = false
     /// The Window menu's ⌘-1 … ⌘-9 tab shortcuts are live.
     var useCommandNumberTabShortcuts: Bool = true
+    /// Where downloads land. Empty means the system Downloads folder; the
+    /// Settings window writes the folder the user picks here.
+    var downloadDirectory: String = ""
 
     static var supportDir: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -66,6 +69,7 @@ final class Config {
         if let v = d["commandClickOpensNewTab"] as? Bool { commandClickOpensNewTab = v }
         if let v = d["activateNewTabsOnOpen"] as? Bool { activateNewTabsOnOpen = v }
         if let v = d["useCommandNumberTabShortcuts"] as? Bool { useCommandNumberTabShortcuts = v }
+        if let v = d["downloadDirectory"] as? String { downloadDirectory = v }
     }
 
     /// Called by the Settings picker. Keeps the legacy template in sync so older
@@ -74,6 +78,21 @@ final class Config {
         searchEngine = id
         if let t = SearchEngines.template(for: id) { searchTemplate = t }
         save()
+    }
+
+    /// The effective download folder: the user's choice when it still exists,
+    /// else the system Downloads folder. A stale or hand-edited path never
+    /// breaks downloading; it just falls back to the default.
+    var downloadDirectoryURL: URL {
+        let def = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+        let raw = downloadDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return def }
+        let expanded = (raw as NSString).expandingTildeInPath
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir),
+              isDir.boolValue else { return def }
+        return URL(fileURLWithPath: expanded, isDirectory: true)
     }
 
     /// Homepage as a loadable URL, or nil for the native start page. Empty,
@@ -103,6 +122,7 @@ final class Config {
             "commandClickOpensNewTab": commandClickOpensNewTab,
             "activateNewTabsOnOpen": activateNewTabsOnOpen,
             "useCommandNumberTabShortcuts": useCommandNumberTabShortcuts,
+            "downloadDirectory": downloadDirectory,
         ]
         if let data = try? JSONSerialization.data(withJSONObject: d, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: fileURL, options: .atomic)

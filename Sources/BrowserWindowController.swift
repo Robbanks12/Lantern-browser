@@ -12,7 +12,7 @@ final class BrowserChromeView: NSView {
     override var isFlipped: Bool { true }
 }
 
-final class BrowserWindowController: NSWindowController, NSWindowDelegate {
+final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPopoverDelegate {
 
     private(set) var tabs: [Tab] = []
     private(set) var activeIndex = 0
@@ -50,7 +50,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var urlField: URLField { urlBar.field }
     private let statusPill = StatusPill()
     private let downloadIndicator = DownloadIndicator()
-    private let plusButton = NSButton()
+    private var plusButton: ToolbarButton!
+    /// Built on the first click and released when it closes, so a window that never
+    /// opens the list pays nothing for it.
+    private var downloadsPopover: NSPopover?
+    private var downloadsPopoverClosedAt: Date?
 
     private let findRow = BarBackgroundView()
     private let findField = NSTextField()
@@ -139,6 +143,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         progressBar.active = false
         findRow.isHidden = true
         downloadIndicator.isHidden = true
+        // Its own layer, so switching from the progress ring to the settled glyph
+        // cannot leave the accent arc behind.
+        downloadIndicator.wantsLayer = true
+        downloadIndicator.onClick = { [weak self] in self?.toggleDownloadsPopover() }
 
         backButton = ToolbarButton(symbol: "chevron.backward", tip: "Back (\u{2318}[)",
                                    target: self, action: #selector(goBack))
@@ -153,13 +161,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                                      tip: "Ad & tracker blocking",
                                      target: self, action: #selector(toggleBlocking))
 
-        plusButton.bezelStyle = .accessoryBarAction
-        plusButton.isBordered = false
-        plusButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")
-        plusButton.imageScaling = .scaleProportionallyDown
-        plusButton.target = self
-        plusButton.action = #selector(newTabFromToolbar)
-        plusButton.toolTip = "New Tab (\u{2318}T)"
+        plusButton = ToolbarButton(symbol: "plus", tip: "New Tab (\u{2318}T)",
+                                   target: self, action: #selector(newTabFromToolbar))
 
         urlField.delegate = self
         urlField.target = self
@@ -270,6 +273,21 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         var right = toolbarWidth - 12
         plusButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
         right -= bw + 2
+
+        // The download ring takes the same slot as every other toolbar button, so its
+        // padding matches the controls either side of it. The cluster closes up while
+        // it is hidden, so an idle window shows no empty slot.
+        if !downloadIndicator.isHidden {
+            downloadIndicator.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
+            right -= bw + 2
+        }
+
+        shieldButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
+        right -= bw + 2
+        bookmarkButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
+        right -= bw + 2
+
+        // The readout sits at the head of the right-hand cluster, left of the star.
         if Settings.shared.showMemoryPill(jsonValue: Config.shared.showMemoryReadout) {
             statusPill.isHidden = false
             let w = max(64, min(190, statusPill.fittingWidth))
@@ -279,21 +297,27 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             statusPill.isHidden = true
         }
 
-        if !downloadIndicator.isHidden {
-            downloadIndicator.frame = NSRect(x: right - 22, y: (toolRow - 22) / 2, width: 22, height: 22)
-            right -= 22 + 2
-        }
-        shieldButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
-        right -= bw + 2
-        bookmarkButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
-        right -= bw + 2
-        reloadButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
-        right -= bw + 10
+        // Leftmost item of the cluster: the readout when it is shown, else the star.
+        let clusterLeft = statusPill.isHidden ? bookmarkButton.frame.minX : statusPill.frame.minX
 
-        let urlX = forwardButton.frame.maxX + 10
+        // Reload belongs with the address bar, not with the page buttons. Safari leaves
+        // a clear gap either side of that pair, so the slack is split evenly between the
+        // nav buttons and the page controls, and reload keeps a small gap to the bar so
+        // the two still read as one block.
+        let reloadGap: CGFloat = 8
+        let minBarWidth: CGFloat = 220
+        let navRight = forwardButton.frame.maxX
+        let available = clusterLeft - navRight
+        let slack = available - bw - reloadGap - minBarWidth
+        let sideGap = max(14, min(toolbarWidth * 0.14, slack / 2))
+
+        let reloadX = clusterLeft - sideGap - bw
+        reloadButton.frame = NSRect(x: reloadX, y: y, width: bw, height: bh)
+
+        let urlX = navRight + sideGap
         let fieldH: CGFloat = 28
         urlBar.frame = NSRect(x: urlX, y: (toolRow - fieldH) / 2,
-                              width: max(90, right - urlX), height: fieldH)
+                              width: max(90, reloadX - reloadGap - urlX), height: fieldH)
 
         if findVisible {
             findField.frame = NSRect(x: 14, y: 5, width: 250, height: 24)
@@ -457,6 +481,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         tabStrip.cancelDrag()
+        downloadsPopover?.close()
         saveSessionNow()
         NotificationCenter.default.removeObserver(self)
         hibernationTimer?.invalidate()
@@ -606,12 +631,50 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private func updateDownloadIndicator() {
         let d = Downloads.shared
-        downloadIndicator.isHidden = !d.isDownloading
+        // Visible while the list holds anything, so finished files stay reachable, and
+        // held in place while its popover is open even if the list empties under it.
+        downloadIndicator.isHidden = !d.hasItems && downloadsPopover == nil
+        downloadIndicator.isActive = d.isDownloading
         downloadIndicator.progress = d.overallProgress
         downloadIndicator.toolTip = d.isDownloading
             ? "\(d.activeCount) download\(d.activeCount == 1 ? "" : "s") \u{2014} \(Int(d.overallProgress * 100))%"
-            : nil
+            : (d.hasItems ? "Downloads" : nil)
         layoutChrome()
+    }
+
+    /// One popover, anchored under the indicator, created on demand and released when
+    /// it closes.
+    private func toggleDownloadsPopover() {
+        if let pop = downloadsPopover, pop.isShown {
+            pop.performClose(nil)
+            return
+        }
+        // A transient popover closes itself on the very click that lands on its anchor,
+        // so a click arriving just after that means "close", not "open again".
+        if let closedAt = downloadsPopoverClosedAt,
+           Date().timeIntervalSince(closedAt) < 0.25 {
+            downloadsPopoverClosedAt = nil
+            return
+        }
+        let pop = NSPopover()
+        pop.behavior = .transient
+        pop.animates = true
+        pop.delegate = self
+        pop.contentViewController = DownloadsPopoverController(nibName: nil, bundle: nil)
+        // The toolbar row is flipped, so its maxY edge is the visual bottom: anchoring
+        // there makes the popover drop down out of the toolbar, as Safari's does.
+        pop.show(relativeTo: downloadIndicator.bounds, of: downloadIndicator, preferredEdge: .maxY)
+        downloadsPopover = pop
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        // Ignore a close from a popover that has already been replaced.
+        guard let pop = notification.object as? NSPopover, pop === downloadsPopover else { return }
+        downloadsPopoverClosedAt = Date()
+        downloadsPopover = nil
+        // Clearing the list while the popover was open left the anchor in place; now
+        // that it is closed it can go.
+        updateDownloadIndicator()
     }
 
     func refreshChrome() {
