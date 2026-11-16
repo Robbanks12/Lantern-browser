@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 APP="Lantern.app"
 NAME="Lantern"
 BUNDLE_ID="com.lantern.browser"
-VERSION="1.0"
+VERSION="0.1.0"
 DEST="${1:-.}"
 # The one folder Lantern writes to. Inert while the app is unsandboxed -- and it is
 # deliberately unsandboxed, because the sandbox would cut off the libproc accounting
