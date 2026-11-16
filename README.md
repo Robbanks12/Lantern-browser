@@ -124,9 +124,9 @@ currently asleep — hover it for the per-process breakdown.
 
 ## Configuration
 
-`~/Library/Application Support/Lantern/config.json` — edited with `⌘,`. Most changes
-apply immediately; restoring the session waits for the next launch and developer
-tools for newly opened tabs.
+`⌘,` opens the Settings page. Most changes apply immediately; restoring the session
+waits for the next launch, and developer tools apply only to newly opened tabs. 
+Settings are stored in `~/Library/Application Support/Lantern/config.json.`
 
 | key | default | |
 |---|---|---|
