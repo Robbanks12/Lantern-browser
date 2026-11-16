@@ -12,16 +12,19 @@ protocol TabStripDelegate: AnyObject {
 /// One view per tab, everything drawn by hand. A stock NSTableView or NSSegmented
 /// control would add layers, cells and layout passes we do not need.
 final class TabItemView: NSView {
-    var title: String = "" { didSet { needsDisplay = true } }
-    var favicon: NSImage? { didSet { needsDisplay = true } }
-    var isSelected = false { didSet { needsDisplay = true } }
-    var isHibernated = false { didSet { needsDisplay = true } }
-    var isLoading = false { didSet { needsDisplay = true } }
-    var progress: Double = 0 { didSet { if isLoading { needsDisplay = true } } }
-    var isPrivate = false { didSet { needsDisplay = true } }
+    // Every one of these is rewritten on each state tick, so each only repaints
+    // when its value actually moved. Progress ticks during a load must not
+    // repaint tabs whose title, icon and flags are unchanged.
+    var title: String = "" { didSet { if title != oldValue { needsDisplay = true } } }
+    var favicon: NSImage? { didSet { if favicon !== oldValue { needsDisplay = true } } }
+    var isSelected = false { didSet { if isSelected != oldValue { needsDisplay = true } } }
+    var isHibernated = false { didSet { if isHibernated != oldValue { needsDisplay = true } } }
+    var isLoading = false { didSet { if isLoading != oldValue { needsDisplay = true } } }
+    var progress: Double = 0 { didSet { if isLoading && progress != oldValue { needsDisplay = true } } }
+    var isPrivate = false { didSet { if isPrivate != oldValue { needsDisplay = true } } }
 
-    private var hovering = false { didSet { needsDisplay = true } }
-    private var closeHovering = false { didSet { needsDisplay = true } }
+    private var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
+    private var closeHovering = false { didSet { if closeHovering != oldValue { needsDisplay = true } } }
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
     var contextActions: [(String, () -> Void)] = []

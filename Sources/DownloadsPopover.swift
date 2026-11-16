@@ -208,6 +208,10 @@ final class DownloadRowView: NSView {
     private var isHovered = false { didSet { needsDisplay = true } }
     var onAction: (() -> Void)?
     var onSelect: (() -> Void)?
+    /// The button glyph and icon follow the row's state, not its progress ticks:
+    /// both are rebuilt only when the state or the file type actually changes.
+    private var lastActionState: DownloadItem.State?
+    private var lastIconKey: String?
 
     var itemID: UUID { item.id }
 
@@ -271,26 +275,37 @@ final class DownloadRowView: NSView {
     override func mouseDown(with event: NSEvent) { onSelect?() }
 
     func refresh() {
-        nameLabel.stringValue = item.name
-        sizeLabel.stringValue = item.detail
-        nameLabel.textColor = isSelected ? .white : .labelColor
-        sizeLabel.textColor = isSelected ? NSColor.white.withAlphaComponent(0.8) : .secondaryLabelColor
+        if nameLabel.stringValue != item.name { nameLabel.stringValue = item.name }
+        let detail = item.detail
+        if sizeLabel.stringValue != detail { sizeLabel.stringValue = detail }
+        let nameColor: NSColor = isSelected ? .white : .labelColor
+        if nameLabel.textColor != nameColor { nameLabel.textColor = nameColor }
+        let sizeColor: NSColor = isSelected ? NSColor.white.withAlphaComponent(0.8) : .secondaryLabelColor
+        if sizeLabel.textColor != sizeColor { sizeLabel.textColor = sizeColor }
 
-        switch item.state {
-        case .downloading:
-            actionButton.image = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: "Pause")
-            actionButton.toolTip = "Pause"
-        case .paused:
-            actionButton.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Resume")
-            actionButton.toolTip = "Resume"
-        case .finished, .failed:
-            actionButton.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Show in Finder")
-            actionButton.toolTip = "Show in Finder"
+        if lastActionState != item.state {
+            lastActionState = item.state
+            switch item.state {
+            case .downloading:
+                actionButton.image = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: "Pause")
+                actionButton.toolTip = "Pause"
+            case .paused:
+                actionButton.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Resume")
+                actionButton.toolTip = "Resume"
+            case .finished, .failed:
+                actionButton.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Show in Finder")
+                actionButton.toolTip = "Show in Finder"
+            }
         }
-        actionButton.contentTintColor = isSelected ? .white : .secondaryLabelColor
+        let buttonColor: NSColor = isSelected ? .white : .secondaryLabelColor
+        if actionButton.contentTintColor != buttonColor { actionButton.contentTintColor = buttonColor }
         // By content type, never by opening the file: reading the Downloads folder is
         // exactly what makes macOS ask for permission.
-        iconView.image = DownloadRowView.icon(for: item)
+        let iconKey = item.destination.pathExtension.lowercased()
+        if lastIconKey != iconKey {
+            lastIconKey = iconKey
+            iconView.image = DownloadRowView.icon(for: item)
+        }
         needsDisplay = true
     }
 
@@ -330,7 +345,7 @@ final class DownloadRowView: NSView {
     }
 
     private static func icon(for item: DownloadItem) -> NSImage {
-        let ext = item.destination.pathExtension
+        let ext = item.destination.pathExtension.lowercased()
         let type = ext.isEmpty ? UTType.data : (UTType(filenameExtension: ext) ?? .data)
         return NSWorkspace.shared.icon(for: type)
     }

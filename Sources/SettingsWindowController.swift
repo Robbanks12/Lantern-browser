@@ -392,10 +392,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let url = Config.shared.downloadDirectoryURL
         popup.addItem(withTitle: url.lastPathComponent)
         if let item = popup.lastItem {
-            // The folder's own icon, the way Safari shows Downloads.
-            let icon = NSWorkspace.shared.icon(forFile: url.path)
-            icon.size = NSSize(width: 16, height: 16)
-            item.image = icon
+            // The stock folder icon, never the folder's own: asking LaunchServices
+            // about ~/Downloads reads the folder, which is what makes macOS ask for
+            // permission. Menu items draw images at natural size, so pin it to the
+            // 16 point slot menus use.
+            if let icon = NSImage(named: NSImage.folderName)?.copy() as? NSImage {
+                icon.size = NSSize(width: 16, height: 16)
+                item.image = icon
+            }
         }
         popup.addItem(withTitle: "Choose…")
         popup.selectItem(at: 0)

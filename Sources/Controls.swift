@@ -82,7 +82,7 @@ final class ToolbarButton: NSButton {
 /// The memory readout / transient status text, drawn as a soft capsule so it reads as
 /// a deliberate part of the toolbar rather than leftover debug text.
 final class StatusPill: NSView {
-    var text: String = "" { didSet { needsDisplay = true } }
+    var text: String = "" { didSet { if text != oldValue { needsDisplay = true } } }
 
     override var isFlipped: Bool { true }
 
@@ -114,9 +114,9 @@ final class StatusPill: NSView {
 /// is empty, so it costs nothing at rest. No timer: progress arrives from WKDownload's
 /// KVO. Clicking it opens the downloads popover, so it behaves like a button.
 final class DownloadIndicator: NSView {
-    var progress: Double = 0 { didSet { needsDisplay = true } }
+    var progress: Double = 0 { didSet { if progress != oldValue { needsDisplay = true } } }
     /// True while a transfer runs. False draws the settled glyph instead of the ring.
-    var isActive = true { didSet { needsDisplay = true } }
+    var isActive = true { didSet { if isActive != oldValue { needsDisplay = true } } }
     var onClick: (() -> Void)?
 
     override var isFlipped: Bool { true }

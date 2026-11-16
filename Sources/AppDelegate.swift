@@ -202,7 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     @objc func showAbout() {
-        let s = MemoryMonitor.sample()
+        let s = MemoryMonitor.sharedSample(maxAge: 0)
         let a = NSAlert()
         a.messageText = "Lantern 🏮"
         a.informativeText = """

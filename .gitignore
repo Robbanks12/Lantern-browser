@@ -1,5 +1,6 @@
-# Build intermediates (the finished bundle is committed; these are not)
+# Build intermediates and the finished bundle (shipped via GitHub Releases, not git)
 build/
 *.o
 *.swiftmodule
 .DS_Store
+Lantern.app/

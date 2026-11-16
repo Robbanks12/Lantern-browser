@@ -2,33 +2,75 @@ import Foundation
 
 /// User-editable settings, read from ~/Library/Application Support/Lantern/config.json
 /// Missing file => defaults. Nothing here requires a rebuild to change.
+/// The on-disk shape of config.json. Every key carries its default, and decoding
+/// is per-key lenient: a missing key or a mistyped value falls back to the
+/// default for that key only, so one bad line never nukes the rest of the file.
+private struct StoredConfig: Codable {
+    var searchTemplate = "https://www.google.com/search?q=%s"
+    /// nil when the file predates the engine picker: Config adopts an engine
+    /// from the template instead of assuming one.
+    var searchEngine: String?
+    var homepage = "about:blank"
+    var hibernateAfterMinutes = 5.0
+    var hibernateOnMemoryPressure = true
+    var blockAdsAndTrackers = true
+    var restoreSessionOnLaunch = true
+    var showMemoryReadout = true
+    var enableDeveloperTools = true
+    var doubleClickTabStripForNewTab = true
+    var commandClickOpensNewTab = true
+    var activateNewTabsOnOpen = false
+    var useCommandNumberTabShortcuts = true
+    var downloadDirectory = ""
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        searchTemplate = (try? c.decodeIfPresent(String.self, forKey: .searchTemplate)) ?? searchTemplate
+        searchEngine = try? c.decodeIfPresent(String.self, forKey: .searchEngine)
+        homepage = (try? c.decodeIfPresent(String.self, forKey: .homepage)) ?? homepage
+        hibernateAfterMinutes = (try? c.decodeIfPresent(Double.self, forKey: .hibernateAfterMinutes)) ?? hibernateAfterMinutes
+        hibernateOnMemoryPressure = (try? c.decodeIfPresent(Bool.self, forKey: .hibernateOnMemoryPressure)) ?? hibernateOnMemoryPressure
+        blockAdsAndTrackers = (try? c.decodeIfPresent(Bool.self, forKey: .blockAdsAndTrackers)) ?? blockAdsAndTrackers
+        restoreSessionOnLaunch = (try? c.decodeIfPresent(Bool.self, forKey: .restoreSessionOnLaunch)) ?? restoreSessionOnLaunch
+        showMemoryReadout = (try? c.decodeIfPresent(Bool.self, forKey: .showMemoryReadout)) ?? showMemoryReadout
+        enableDeveloperTools = (try? c.decodeIfPresent(Bool.self, forKey: .enableDeveloperTools)) ?? enableDeveloperTools
+        doubleClickTabStripForNewTab = (try? c.decodeIfPresent(Bool.self, forKey: .doubleClickTabStripForNewTab)) ?? doubleClickTabStripForNewTab
+        commandClickOpensNewTab = (try? c.decodeIfPresent(Bool.self, forKey: .commandClickOpensNewTab)) ?? commandClickOpensNewTab
+        activateNewTabsOnOpen = (try? c.decodeIfPresent(Bool.self, forKey: .activateNewTabsOnOpen)) ?? activateNewTabsOnOpen
+        useCommandNumberTabShortcuts = (try? c.decodeIfPresent(Bool.self, forKey: .useCommandNumberTabShortcuts)) ?? useCommandNumberTabShortcuts
+        downloadDirectory = (try? c.decodeIfPresent(String.self, forKey: .downloadDirectory)) ?? downloadDirectory
+    }
+}
+
 final class Config {
     static let shared = Config()
 
-    var searchTemplate: String = "https://www.google.com/search?q=%s"
+    var searchTemplate: String
     /// Stable engine id from the picker (default google). Empty means a
     /// hand-written searchTemplate with no matching engine: it is used as-is.
-    var searchEngine: String = "google"
-    var homepage: String = "about:blank"
+    var searchEngine: String
+    var homepage: String
     /// Minutes a background tab may sit before its web process is destroyed. 0 = never.
-    var hibernateAfterMinutes: Double = 5
+    var hibernateAfterMinutes: Double
     /// Hibernate every background tab immediately when the OS reports memory pressure.
-    var hibernateOnMemoryPressure: Bool = true
-    var blockAdsAndTrackers: Bool = true
-    var restoreSessionOnLaunch: Bool = true
-    var showMemoryReadout: Bool = true
-    var enableDeveloperTools: Bool = true
+    var hibernateOnMemoryPressure: Bool
+    var blockAdsAndTrackers: Bool
+    var restoreSessionOnLaunch: Bool
+    var showMemoryReadout: Bool
+    var enableDeveloperTools: Bool
     /// Double-clicking empty tab-strip space opens a new tab.
-    var doubleClickTabStripForNewTab: Bool = true
+    var doubleClickTabStripForNewTab: Bool
     /// ⌘-clicking a link opens it in a new tab rather than loading it in place.
-    var commandClickOpensNewTab: Bool = true
+    var commandClickOpensNewTab: Bool
     /// A link opened in a new tab becomes the active tab.
-    var activateNewTabsOnOpen: Bool = false
+    var activateNewTabsOnOpen: Bool
     /// The Window menu's ⌘-1 … ⌘-9 tab shortcuts are live.
-    var useCommandNumberTabShortcuts: Bool = true
+    var useCommandNumberTabShortcuts: Bool
     /// Where downloads land. Empty means the system Downloads folder; the
     /// Settings window writes the folder the user picks here.
-    var downloadDirectory: String = ""
+    var downloadDirectory: String
 
     static var supportDir: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -37,19 +79,42 @@ final class Config {
         return base
     }()
 
-    private var fileURL: URL { Config.supportDir.appendingPathComponent("config.json") }
+    private static var fileURL: URL { Config.supportDir.appendingPathComponent("config.json") }
 
-    private init() { load() }
-
-    private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let d = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            save()  // materialize the file so it is discoverable and editable
-            return
+    /// Writes one snapshot without touching self, so the first launch can
+    /// materialize the file before any property exists to read back.
+    private static func persist(_ stored: StoredConfig) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(stored) {
+            try? data.write(to: Self.fileURL, options: .atomic)
         }
-        if let v = d["searchTemplate"] as? String { searchTemplate = v }
-        if let v = d["searchEngine"] as? String {
-            searchEngine = v
+    }
+
+    private init() {
+        let stored: StoredConfig
+        if let data = try? Data(contentsOf: Self.fileURL),
+           let decoded = try? JSONDecoder().decode(StoredConfig.self, from: data) {
+            stored = decoded
+        } else {
+            stored = StoredConfig()
+            Self.persist(stored)  // materialize the file so it is discoverable and editable
+        }
+        searchTemplate = stored.searchTemplate
+        homepage = stored.homepage
+        hibernateAfterMinutes = stored.hibernateAfterMinutes
+        hibernateOnMemoryPressure = stored.hibernateOnMemoryPressure
+        blockAdsAndTrackers = stored.blockAdsAndTrackers
+        restoreSessionOnLaunch = stored.restoreSessionOnLaunch
+        showMemoryReadout = stored.showMemoryReadout
+        enableDeveloperTools = stored.enableDeveloperTools
+        doubleClickTabStripForNewTab = stored.doubleClickTabStripForNewTab
+        commandClickOpensNewTab = stored.commandClickOpensNewTab
+        activateNewTabsOnOpen = stored.activateNewTabsOnOpen
+        useCommandNumberTabShortcuts = stored.useCommandNumberTabShortcuts
+        downloadDirectory = stored.downloadDirectory
+        if let id = stored.searchEngine {
+            searchEngine = id
         } else if let known = SearchEngines.id(forTemplate: searchTemplate) {
             // A hand-set template that names a known engine: adopt it so the
             // picker reflects reality instead of silently overriding it.
@@ -57,19 +122,9 @@ final class Config {
         } else if searchTemplate != (SearchEngines.template(for: SearchEngines.defaultEngineID) ?? "") {
             // A hand-set template with no matching engine: keep using it.
             searchEngine = ""
+        } else {
+            searchEngine = SearchEngines.defaultEngineID
         }
-        if let v = d["homepage"] as? String { homepage = v }
-        if let v = d["hibernateAfterMinutes"] as? Double { hibernateAfterMinutes = v }
-        if let v = d["hibernateOnMemoryPressure"] as? Bool { hibernateOnMemoryPressure = v }
-        if let v = d["blockAdsAndTrackers"] as? Bool { blockAdsAndTrackers = v }
-        if let v = d["restoreSessionOnLaunch"] as? Bool { restoreSessionOnLaunch = v }
-        if let v = d["showMemoryReadout"] as? Bool { showMemoryReadout = v }
-        if let v = d["enableDeveloperTools"] as? Bool { enableDeveloperTools = v }
-        if let v = d["doubleClickTabStripForNewTab"] as? Bool { doubleClickTabStripForNewTab = v }
-        if let v = d["commandClickOpensNewTab"] as? Bool { commandClickOpensNewTab = v }
-        if let v = d["activateNewTabsOnOpen"] as? Bool { activateNewTabsOnOpen = v }
-        if let v = d["useCommandNumberTabShortcuts"] as? Bool { useCommandNumberTabShortcuts = v }
-        if let v = d["downloadDirectory"] as? String { downloadDirectory = v }
     }
 
     /// Called by the Settings picker. Keeps the legacy template in sync so older
@@ -108,25 +163,22 @@ final class Config {
     }
 
     func save() {
-        let d: [String: Any] = [
-            "searchTemplate": searchTemplate,
-            "searchEngine": searchEngine,
-            "homepage": homepage,
-            "hibernateAfterMinutes": hibernateAfterMinutes,
-            "hibernateOnMemoryPressure": hibernateOnMemoryPressure,
-            "blockAdsAndTrackers": blockAdsAndTrackers,
-            "restoreSessionOnLaunch": restoreSessionOnLaunch,
-            "showMemoryReadout": showMemoryReadout,
-            "enableDeveloperTools": enableDeveloperTools,
-            "doubleClickTabStripForNewTab": doubleClickTabStripForNewTab,
-            "commandClickOpensNewTab": commandClickOpensNewTab,
-            "activateNewTabsOnOpen": activateNewTabsOnOpen,
-            "useCommandNumberTabShortcuts": useCommandNumberTabShortcuts,
-            "downloadDirectory": downloadDirectory,
-        ]
-        if let data = try? JSONSerialization.data(withJSONObject: d, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: fileURL, options: .atomic)
-        }
+        var stored = StoredConfig()
+        stored.searchTemplate = searchTemplate
+        stored.searchEngine = searchEngine
+        stored.homepage = homepage
+        stored.hibernateAfterMinutes = hibernateAfterMinutes
+        stored.hibernateOnMemoryPressure = hibernateOnMemoryPressure
+        stored.blockAdsAndTrackers = blockAdsAndTrackers
+        stored.restoreSessionOnLaunch = restoreSessionOnLaunch
+        stored.showMemoryReadout = showMemoryReadout
+        stored.enableDeveloperTools = enableDeveloperTools
+        stored.doubleClickTabStripForNewTab = doubleClickTabStripForNewTab
+        stored.commandClickOpensNewTab = commandClickOpensNewTab
+        stored.activateNewTabsOnOpen = activateNewTabsOnOpen
+        stored.useCommandNumberTabShortcuts = useCommandNumberTabShortcuts
+        stored.downloadDirectory = downloadDirectory
+        Self.persist(stored)
     }
 
     /// Turn whatever the user typed into something loadable: URL, bare host, or search.

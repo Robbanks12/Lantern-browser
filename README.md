@@ -150,7 +150,10 @@ plain files; nothing is a database.
 | | |
 |---|---|
 | `Sources/Tab.swift` | tab model, hibernate/wake, WebKit delegates |
-| `Sources/BrowserWindowController.swift` | window , tab switching, timers |
+| `Sources/BrowserWindowController*.swift` | window chrome, split by concern (`+Tabs`, `+Display`, `+Actions`, `+FindZoom`, `+Fullscreen`, `+Delegates`) |
+| `Sources/BrowserWebView.swift` | web view whose context-menu downloads work |
+| `Sources/Downloads.swift` / `DownloadsPopover.swift` | transfer list + toolbar popover |
+| `Sources/SettingsWindowController.swift` + `Settings.swift` | preferences window, per-pane builders |
 | `Sources/ContentBlocker.swift` | domain list → compiled WebKit rule list |
 | `Sources/MemoryMonitor.swift` | per-process footprint, Activity-Monitor-style attribution |
 | `Sources/TabStrip.swift` | hand-drawn tab strip, tab context menu |

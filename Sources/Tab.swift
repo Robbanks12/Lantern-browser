@@ -175,8 +175,16 @@ final class Tab: NSObject {
         return Date().timeIntervalSince(lastActive) >= seconds
     }
 
+    /// Never kill a tab that is capturing or playing.
+    ///
+    /// Audibility has no public WebKit API, so this reads the private
+    /// `_isPlayingAudio` key. The `responds(to:)` check is the fallback: if a
+    /// future macOS removes the key, this returns false and a sounding tab
+    /// becomes hibernatable, so re-check audibility after every major OS update
+    /// rather than assuming silence means safety. (An async JS probe was
+    /// rejected as the fallback: polling the page on a timer would spend the
+    /// battery this browser refuses to spend.)
     private var isPlayingMedia: Bool {
-        // Never kill a tab that is capturing or playing.
         guard let wv = webView else { return false }
         if wv.cameraCaptureState != .none || wv.microphoneCaptureState != .none { return true }
         let sel = Selector(("_isPlayingAudio"))
@@ -184,9 +192,15 @@ final class Tab: NSObject {
         return wv.value(forKey: "_isPlayingAudio") as? Bool ?? false
     }
 
+    /// Set while our own error page is on screen: its load commits and finishes
+    /// like a real one, and without this the failing URL would be recorded in
+    /// history (and gain a favicon fetch) for a page that never loaded.
+    private var suppressNextVisitRecord = false
+
     func load(_ url: URL) {
         self.url = url
         savedInteractionState = nil
+        suppressNextVisitRecord = false
         if let wv = webView {
             wv.load(URLRequest(url: url))
         } else {
@@ -196,6 +210,7 @@ final class Tab: NSObject {
     }
 
     func reload() {
+        suppressNextVisitRecord = false
         guard let wv = webView else { ensureLoaded(); return }
         wv.reloadFromOrigin()
     }
@@ -358,10 +373,14 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if let u = webView.url, !isPrivate {
-            Store.shared.recordVisit(url: u, title: webView.title ?? "")
+        if suppressNextVisitRecord {
+            suppressNextVisitRecord = false
+        } else {
+            if let u = webView.url, !isPrivate {
+                Store.shared.recordVisit(url: u, title: webView.title ?? "")
+            }
+            fetchFavicon(for: webView)
         }
-        fetchFavicon(for: webView)
         delegate?.tabDidChangeState(self)
     }
 
@@ -389,7 +408,8 @@ extension Tab: WKNavigationDelegate {
             return
         }
         let failing = (ns.userInfo[NSURLErrorFailingURLStringErrorKey] as? String) ?? url?.absoluteString ?? ""
-        let host = URL(string: failing)?.host ?? failing
+        let host = Self.escaped(URL(string: failing)?.host ?? failing)
+        let reason = Self.escaped(ns.localizedDescription)
         let html = """
         <!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width">
         <style>
@@ -404,11 +424,22 @@ extension Tab: WKNavigationDelegate {
         code{opacity:.5;font-size:.8rem}
         </style>
         <div class=c><h1>Can\u{2019}t open \(host)</h1>
-        <p>\(ns.localizedDescription)</p>
+        <p>\(reason)</p>
         <button onclick="location.reload()">Try again</button>
         <p><code>\(ns.domain) \(ns.code)</code></p></div>
         """
+        suppressNextVisitRecord = true
         webView.loadHTMLString(html, baseURL: URL(string: failing))
+    }
+
+    /// The error page is built from strings, so escape the two that come from
+    /// outside (the host and the system error text) before interpolating them.
+    private static func escaped(_ s: String) -> String {
+        var out = s.replacingOccurrences(of: "&", with: "&amp;")
+        out = out.replacingOccurrences(of: "<", with: "&lt;")
+        out = out.replacingOccurrences(of: ">", with: "&gt;")
+        out = out.replacingOccurrences(of: "\"", with: "&quot;")
+        return out
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {

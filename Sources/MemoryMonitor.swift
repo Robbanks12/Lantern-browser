@@ -17,6 +17,12 @@ struct MemorySample {
         if mb >= 1024 { return String(format: "%.2f GB", mb / 1024) }
         return String(format: "%.0f MB", mb)
     }
+
+    /// "312 MB total — app 45 MB + 3 web processes", for the pill tooltip.
+    func detail() -> String {
+        "\(display) total \u{2014} app \(ByteCountFormatter.string(fromByteCount: Int64(appBytes), countStyle: .memory))"
+            + " + \(helperCount) web process\(helperCount == 1 ? "" : "es")"
+    }
 }
 
 enum MemoryMonitor {
@@ -55,6 +61,16 @@ enum MemoryMonitor {
         }
         if pathCache.count < 4096 { pathCache[pid] = verdict ? "1" : "0" }
         return verdict
+    }
+
+    /// One sample shared by every window: sampling walks every process on the
+    /// machine, so N windows must not each pay for it on every readout tick.
+    private static var cached: (at: Date, sample: MemorySample)?
+    static func sharedSample(maxAge: TimeInterval = 8) -> MemorySample {
+        if let cached, Date().timeIntervalSince(cached.at) < maxAge { return cached.sample }
+        let s = sample()
+        cached = (Date(), s)
+        return s
     }
 
     static func sample() -> MemorySample {
