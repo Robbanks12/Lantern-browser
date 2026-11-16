@@ -188,4 +188,6 @@ project is MIT licensed, and that license carries over to this fork.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). 
+The source code is licensed under the MIT License. — See [LICENSE](LICENSE) for details.
+
+The Lantern app icon, logo, and visual assets are Copyright (c) 2026 Robbanks12 and are **not** covered by the MIT License. See [ASSETS.md](ASSETS.md) for details.
