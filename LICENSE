@@ -20,3 +20,9 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+EXCEPTION:
+The Lantern app icon, logo, and all visual assets located in the `Resources/` 
+directory are NOT covered by the MIT License. They are Copyright (c) 2026 Robbanks12. 
+All Rights Reserved. You may not use, copy, modify, or distribute these 
+assets without explicit written permission from the author.
