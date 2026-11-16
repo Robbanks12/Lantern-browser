@@ -209,7 +209,9 @@ final class Tab: NSObject {
     // MARK: - Observation
 
     private func observe(_ wv: WKWebView) {
-        func note() { delegate?.tabDidChangeState(self) }
+        // These tokens are stored on self, so every closure must hold self weakly:
+        // anything stronger is a cycle (Tab -> observation -> closure -> Tab) that
+        // outlives the tab with its web view, and with it the content process.
         observations = [
             wv.observe(\.title, options: [.new]) { [weak self] w, _ in
                 guard let self else { return }
@@ -217,25 +219,31 @@ final class Tab: NSObject {
                     self.title = t
                     if let u = w.url { Store.shared.updateTitle(url: u, title: t) }
                 }
-                note()
+                self.delegate?.tabDidChangeState(self)
             },
             wv.observe(\.url, options: [.new]) { [weak self] w, _ in
                 guard let self else { return }
                 self.url = w.url
-                note()
+                self.delegate?.tabDidChangeState(self)
             },
             wv.observe(\.isLoading, options: [.new]) { [weak self] w, _ in
                 guard let self else { return }
                 self.isLoading = w.isLoading
-                note()
+                self.delegate?.tabDidChangeState(self)
             },
             wv.observe(\.estimatedProgress, options: [.new]) { [weak self] w, _ in
                 guard let self else { return }
                 self.progress = w.estimatedProgress
-                note()
+                self.delegate?.tabDidChangeState(self)
             },
-            wv.observe(\.canGoBack, options: [.new]) { _, _ in note() },
-            wv.observe(\.canGoForward, options: [.new]) { _, _ in note() },
+            wv.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in
+                guard let self else { return }
+                self.delegate?.tabDidChangeState(self)
+            },
+            wv.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in
+                guard let self else { return }
+                self.delegate?.tabDidChangeState(self)
+            },
         ]
     }
 

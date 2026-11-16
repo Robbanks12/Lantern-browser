@@ -483,6 +483,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
         tabStrip.cancelDrag()
         downloadsPopover?.close()
         saveSessionNow()
+        // Release every web view now, not whenever the last reference happens to
+        // go: a closed window must not leave content processes running.
+        tabs.forEach { $0.hibernate() }
         NotificationCenter.default.removeObserver(self)
         hibernationTimer?.invalidate()
         memoryTimer?.invalidate()
