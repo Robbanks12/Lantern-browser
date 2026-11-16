@@ -12,7 +12,7 @@
 > trying to reach feature and UI parity+ with Safari. Expect rough edges, missing
 > features, and interface changes between releases.
 
-A minimal macOS web browser. A single ~950 KB app bundle, no dependencies, no bundled
+A minimal macOS web browser. A single ~1 MB app bundle, no dependencies, no bundled
 engine, no background services.
 
 Lantern renders with the WebKit already resident in macOS, It prioritizes low memory usage, native speed, and local privacy without the bloat of background updaters, telemetry daemons, or extension host
