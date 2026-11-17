@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory() as td:
     os.makedirs(iconset)
     # No 1024 tier: it roughly doubles the .icns for a size Finder almost never
     # shows. Largest shipped pixels are 256@2x (from the 512 source).
-    sizes = [16, 32, 128, 256, 512]
+    sizes = [16, 32, 64, 128, 256, 512]
     for s in sizes:
         png = os.path.join(iconset, f"icon_{s}x{s}.png")
         # qlmanage/sips cannot rasterize SVG reliably; use CoreGraphics via a tiny swift-free path.
@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory() as td:
     # standard iconset naming
     for s in sizes:
         src = os.path.join(iconset, f"icon_{s}x{s}.png")
-        if s in (32, 128, 256, 512) and os.path.exists(src):
+        if s in (32, 64, 256, 512) and os.path.exists(src):
             half = s // 2
             dst = os.path.join(iconset, f"icon_{half}x{half}@2x.png")
             subprocess.run(["/bin/cp", src, dst], capture_output=True)
