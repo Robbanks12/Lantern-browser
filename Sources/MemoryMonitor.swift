@@ -27,6 +27,10 @@ struct MemorySample {
 
 enum MemoryMonitor {
 
+    /// Sampling walks every process on the machine, so it runs here rather than on
+    /// the main thread, and every piece of the sampler's state is confined to it.
+    private static let work = DispatchQueue(label: "com.lantern.memory", qos: .utility)
+
     /// Phys-footprint of one process, the same number Activity Monitor's "Memory" column shows.
     ///
     /// `proc_pid_rusage` is declared as taking `rusage_info_t *` (i.e. `void **`), but it
@@ -66,14 +70,30 @@ enum MemoryMonitor {
     /// One sample shared by every window: sampling walks every process on the
     /// machine, so N windows must not each pay for it on every readout tick.
     private static var cached: (at: Date, sample: MemorySample)?
+
+    /// Synchronous sample, for the one-off About-panel readout.
     static func sharedSample(maxAge: TimeInterval = 8) -> MemorySample {
-        if let cached, Date().timeIntervalSince(cached.at) < maxAge { return cached.sample }
-        let s = sample()
-        cached = (Date(), s)
-        return s
+        work.sync { cachedSample(maxAge: maxAge) }
     }
 
-    static func sample() -> MemorySample {
+    /// The toolbar pill's path: the caller is never blocked, and the answer arrives
+    /// on the main thread.
+    static func sampleAsync(maxAge: TimeInterval = 8,
+                            completion: @escaping (MemorySample) -> Void) {
+        work.async {
+            let sample = cachedSample(maxAge: maxAge)
+            DispatchQueue.main.async { completion(sample) }
+        }
+    }
+
+    private static func cachedSample(maxAge: TimeInterval) -> MemorySample {
+        if let cached, Date().timeIntervalSince(cached.at) < maxAge { return cached.sample }
+        let sample = measure()
+        cached = (Date(), sample)
+        return sample
+    }
+
+    private static func measure() -> MemorySample {
         // pids are eventually reused, so drop the cache periodically rather than trusting
         // it forever.
         if Date().timeIntervalSince(pathCacheStamp) > 300 {

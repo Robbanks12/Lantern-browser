@@ -30,6 +30,19 @@ extension BrowserWindowController: TabDelegate {
         closeTab(index: idx)
     }
 
+    /// A blank tab WebKit created for a link that became a download. It should go,
+    /// but only once the transfer it is carrying has ended.
+    func tabRequestsRetirement(_ tab: Tab) {
+        guard tabs.contains(where: { $0 === tab }) else { return }
+        // Mark, never close, at this point. The download decision is still travelling
+        // through WebKit, so the transfer may not exist for a few more runloop turns;
+        // closing now would destroy the web view that is about to carry the bytes.
+        // `retireFinishedTransferTabs` closes it when DownloadItem reports an end.
+        tab.awaitsTransferBeforeRetirement = true
+        // A transfer that failed before we got here will not post again.
+        retireFinishedTransferTabs()
+    }
+
     func tabStatus(_ tab: Tab, message: String?) {
         if let message { showStatus(message) }
     }
@@ -110,13 +123,11 @@ extension BrowserWindowController: NSTextFieldDelegate {
     func controlTextDidBeginEditing(_ obj: Notification) {
         guard (obj.object as? NSTextField) === urlField else { return }
         urlBar.setFocused(true)
-        setURLEditing(true)
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
         guard (obj.object as? NSTextField) === urlField else { return }
         urlBar.setFocused(false)
-        setURLEditing(false)
     }
 
     func controlTextDidChange(_ obj: Notification) {

@@ -51,8 +51,12 @@ enum ContentBlocker {
             } else {
                 filter += "[:/]"
             }
+            // Third-party only. A block rule with no load-type also blocks the
+            // document itself, so navigating to one of these domains (a company
+            // homepage, a help centre) became an error page. Subresources from
+            // another origin — what the list is actually for — are still blocked.
             rules.append([
-                "trigger": ["url-filter": filter],
+                "trigger": ["url-filter": filter, "load-type": ["third-party"]],
                 "action": ["type": "block"],
             ])
         }
@@ -69,32 +73,51 @@ enum ContentBlocker {
     /// Compiles (or reuses a cached compilation of) the rule list keyed by content hash,
     /// so editing the domain list recompiles but ordinary launches do not.
     static func load(completion: @escaping (WKContentRuleList?) -> Void) {
-        guard Config.shared.blockAdsAndTrackers else { completion(nil); return }
+        guard Config.shared.blockAdsAndTrackers else { onMain { completion(nil) }; return }
         guard let url = domainListURL(), let text = try? String(contentsOf: url, encoding: .utf8) else {
             NSLog("Lantern: no blocklist found")
-            completion(nil); return
+            onMain { completion(nil) }; return
         }
         let domains = text.split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
-        guard !domains.isEmpty else { completion(nil); return }
+        guard !domains.isEmpty else { onMain { completion(nil) }; return }
+        // A missing store would otherwise leave the completion uncalled, and the
+        // first window is opened from it.
+        guard let store = WKContentRuleListStore.default() else { onMain { completion(nil) }; return }
 
         let json = buildJSON(from: domains)
         let digest = SHA256.hash(data: Data(json.utf8)).compactMap { String(format: "%02x", $0) }.joined()
         let identifier = "lantern-block-" + digest.prefix(16)
-        let store = WKContentRuleListStore.default()
 
-        store?.lookUpContentRuleList(forIdentifier: identifier) { list, _ in
+        // The store calls back on a WebKit queue. Everything below touches AppKit
+        // or the shared ruleList, so both the write and the completion are hopped
+        // to the main thread rather than trusting the caller's thread.
+        store.lookUpContentRuleList(forIdentifier: identifier) { list, _ in
             if let list {
-                ruleList = list
-                completion(list)
+                onMain {
+                    ruleList = list
+                    completion(list)
+                }
                 return
             }
-            store?.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) { list, error in
+            store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) { list, error in
                 if let error { NSLog("Lantern: blocklist compile failed: \(error.localizedDescription)") }
-                ruleList = list
-                completion(list)
+                onMain {
+                    ruleList = list
+                    completion(list)
+                }
             }
+        }
+    }
+
+    /// WKContentRuleListStore delivers on its own queue; every caller of `load`
+    /// builds or mutates AppKit objects, so the answer always arrives on main.
+    private static func onMain(_ work: @escaping () -> Void) {
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.async(execute: work)
         }
     }
 }

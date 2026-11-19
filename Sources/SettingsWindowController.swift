@@ -279,8 +279,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         let pill = NSButton(checkboxWithTitle: "Show memory usage in the toolbar",
                             target: self, action: #selector(toggleMemoryPill(_:)))
-        pill.state = Settings.shared
-            .showMemoryPill(jsonValue: Config.shared.showMemoryReadout) ? .on : .off
+        pill.state = Config.shared.showMemoryReadout ? .on : .off
         b.row("Memory readout:", pill)
 
         b.note("Sleeping destroys a tab's web process and keeps its scroll position and history, "
@@ -479,7 +478,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func toggleMemoryPill(_ sender: NSButton) {
-        Settings.shared.setShowMemoryPill(sender.state == .on)
+        Config.shared.showMemoryReadout = (sender.state == .on)
+        Config.shared.save()
         AppDelegate.shared?.settingsDidChange()
     }
 

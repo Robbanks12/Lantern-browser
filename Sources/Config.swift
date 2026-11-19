@@ -91,12 +91,25 @@ final class Config {
         }
     }
 
+    /// Moves an unparseable config.json aside instead of overwriting the only copy
+    /// of the user's settings.
+    private static func preserveUnreadableFile() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path) else { return }
+        let backup = fileURL.appendingPathExtension("bak")
+        try? fm.removeItem(at: backup)
+        try? fm.moveItem(at: fileURL, to: backup)
+    }
+
     private init() {
         let stored: StoredConfig
         if let data = try? Data(contentsOf: Self.fileURL),
            let decoded = try? JSONDecoder().decode(StoredConfig.self, from: data) {
             stored = decoded
         } else {
+            // A file that exists but will not parse is still the user's settings, and
+            // not ours to discard: keep it as config.json.bak before writing defaults.
+            Self.preserveUnreadableFile()
             stored = StoredConfig()
             Self.persist(stored)  // materialize the file so it is discoverable and editable
         }

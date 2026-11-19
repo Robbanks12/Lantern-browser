@@ -132,8 +132,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc func selectTabByNumber(_ sender: NSMenuItem) {
         guard let c = front else { return }
-        let n = sender.tag
-        c.selectTab(index: n == 9 ? max(0, c.tabs.count - 1) : n)
+        // ⌘9 means "the last tab"; the menu tags it -1 because its index depends on
+        // how many tabs are open.
+        c.selectTab(index: sender.tag < 0 ? max(0, c.tabs.count - 1) : sender.tag)
     }
 
     @objc func openSettings() {
@@ -358,7 +359,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         add(windowMenu, "Previous Tab (arrow)", #selector(previousTab), "\u{F702}", [.command, .option], target: self)
         windowMenu.addItem(.separator())
         for n in 1...9 {
-            add(windowMenu, "Tab \(n)", #selector(selectTabByNumber(_:)), "\(n)", target: self, tag: n - 1)
+            add(windowMenu, "Tab \(n)", #selector(selectTabByNumber(_:)), "\(n)",
+                target: self, tag: n == 9 ? -1 : n - 1)
         }
         windowMenu.addItem(.separator())
         add(windowMenu, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:)))

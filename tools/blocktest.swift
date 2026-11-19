@@ -32,10 +32,23 @@ var rules: [[String: Any]] = domains.map { entry in
     var filter = "^[^:]+://+([^:/?#]+\\.)?" + escape(String(parts[0]))
     if parts.count > 1, !parts[1].isEmpty { filter += "(:[0-9]+)?/" + escape(String(parts[1])) }
     else { filter += "[:/]" }
-    return ["trigger": ["url-filter": filter], "action": ["type": "block"]]
+    // Same shape ContentBlocker builds: third-party only, so a top-level
+    // navigation to the domain itself is not blocked.
+    return ["trigger": ["url-filter": filter, "load-type": ["third-party"]],
+            "action": ["type": "block"]]
 }
 let json = String(decoding: try! JSONSerialization.data(withJSONObject: rules), as: UTF8.self)
 print("compiled from \(domains.count) domains -> \(rules.count) rules")
+
+// Regression check for the scope of the rules: a block rule without load-type
+// also blocks first-party document loads, which turned company homepages into
+// error pages.
+let unscoped = rules.filter { ($0["trigger"] as? [String: Any])?["load-type"] == nil }.count
+print("scope: \(unscoped == 0 ? "all rules third-party only" : "\(unscoped) rule(s) apply first-party")")
+guard unscoped == 0 else {
+    print("\nRESULT: FAIL \u{2014} \(unscoped) rule(s) would also block first-party navigation")
+    exit(4)
+}
 
 let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)

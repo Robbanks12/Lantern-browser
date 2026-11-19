@@ -145,6 +145,27 @@ final class Downloads: NSObject, WKDownloadDelegate {
         items.first { $0.download === download }
     }
 
+    /// True while this web view still owns a transfer that has not ended.
+    ///
+    /// Tabs use it to refuse hibernation and automatic retirement: destroying the
+    /// web view cancels the download, and a WKDownload cannot be re-hosted on
+    /// another one.
+    func hasActiveTransfer(for webView: WKWebView?) -> Bool {
+        guard let webView else { return false }
+        return items.contains {
+            ($0.state == .downloading || $0.state == .paused) && $0.webView === webView
+        }
+    }
+
+    /// True once a transfer this web view carried has finished or failed. Used to
+    /// decide when a tab that only existed to host a download can be retired.
+    func hasEndedTransfer(for webView: WKWebView?) -> Bool {
+        guard let webView else { return false }
+        return items.contains {
+            ($0.state == .finished || $0.state == .failed) && $0.webView === webView
+        }
+    }
+
     /// Attaches an item to the download that will carry its bytes and starts observing
     /// progress. Called once per transfer, and again when a paused one is resumed.
     private func adopt(_ download: WKDownload, into item: DownloadItem) {

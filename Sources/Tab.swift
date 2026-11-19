@@ -5,6 +5,9 @@ protocol TabDelegate: AnyObject {
     func tabDidChangeState(_ tab: Tab)
     func tab(_ tab: Tab, openNewTabWith url: URL?, configuration: WKWebViewConfiguration?, activate: Bool) -> Tab?
     func tabRequestsClose(_ tab: Tab)
+    /// WebKit created this tab for a link that turned into a download. It is blank
+    /// and should go, but only once its transfer has finished.
+    func tabRequestsRetirement(_ tab: Tab)
     func tabStatus(_ tab: Tab, message: String?)
 }
 
@@ -46,6 +49,14 @@ final class Tab: NSObject {
     var lastActive = Date()
     var isHibernated: Bool { webView == nil }
     var hasEverLoaded = false
+    /// True while this tab's web view owns a running or paused download. A tab in
+    /// this state must not be slept or closed: destroying the view cancels the
+    /// transfer, and Downloads has no way to re-host it.
+    var isHostingActiveTransfer: Bool { Downloads.shared.hasActiveTransfer(for: webView) }
+    /// True for a tab that exists only because WebKit needed somewhere to put a
+    /// download. It must never be written into the session: restoring it would
+    /// re-request the file.
+    var isDownloadOnlyTab: Bool { isOpenerTarget && !hasCommittedNavigation }
 
     /// Full session snapshot (back/forward list + scroll offset) kept while hibernated.
     private var savedInteractionState: Data?
@@ -60,7 +71,8 @@ final class Tab: NSObject {
     /// still-false value means this tab exists only to host the transfer.
     private var hasCommittedNavigation = false
     private var observations: [NSKeyValueObservation] = []
-    private static var faviconCache: [String: NSImage] = [:]
+    /// Set when a blank opener tab has to outlive its transfer; the window clears it.
+    var awaitsTransferBeforeRetirement = false
 
     var displayTitle: String {
         if !title.isEmpty { return title }
@@ -78,7 +90,7 @@ final class Tab: NSObject {
         self.webKitWillLoad = (configuration != nil)
         self.isOpenerTarget = (configuration != nil)
         super.init()
-        if let url { self.favicon = Tab.faviconCache[url.host ?? ""] }
+        if !isPrivate, let url { self.favicon = FaviconLoader.cached(for: url.host) }
     }
 
     /// Restore from a previous session without spending a web process yet.
@@ -91,7 +103,7 @@ final class Tab: NSObject {
         self.savedInteractionState = saved.interactionState
         self.pendingURL = URL(string: saved.url)
         super.init()
-        self.favicon = Tab.faviconCache[self.url?.host ?? ""]
+        self.favicon = FaviconLoader.cached(for: self.url?.host)
     }
 
     func snapshot() -> SavedTab {
@@ -172,6 +184,8 @@ final class Tab: NSObject {
     func canHibernate(idleFor seconds: TimeInterval) -> Bool {
         guard webView != nil else { return false }
         if isPlayingMedia { return false }
+        // A tab carrying bytes for Downloads must survive, however idle it looks.
+        if isHostingActiveTransfer { return false }
         return Date().timeIntervalSince(lastActive) >= seconds
     }
 
@@ -212,7 +226,9 @@ final class Tab: NSObject {
     func reload() {
         suppressNextVisitRecord = false
         guard let wv = webView else { ensureLoaded(); return }
-        wv.reloadFromOrigin()
+        // An ordinary reload uses the cache, the way ⌘R does everywhere else; the
+        // unconditional origin reload belongs behind an explicit hard reload.
+        wv.reload()
     }
 
     func stop() { webView?.stopLoading() }
@@ -267,26 +283,18 @@ final class Tab: NSObject {
     // MARK: - Favicon
 
     private func fetchFavicon(for wv: WKWebView) {
-        guard let host = wv.url?.host else { return }
-        if let cached = Tab.faviconCache[host] { favicon = cached; delegate?.tabDidChangeState(self); return }
-
-        let js = """
-        (function(){var l=document.querySelector("link[rel~='icon']")||document.querySelector("link[rel='shortcut icon']");
-        return l&&l.href?l.href:location.origin+'/favicon.ico';})()
-        """
-        wv.evaluateJavaScript(js) { [weak self] result, _ in
-            guard let self, let href = result as? String, let iconURL = URL(string: href) else { return }
-            var req = URLRequest(url: iconURL)
-            req.timeoutInterval = 6
-            URLSession.shared.dataTask(with: req) { data, _, _ in
-                guard let data, let img = NSImage(data: data), img.size.width > 0 else { return }
-                img.size = NSSize(width: 16, height: 16)
-                DispatchQueue.main.async {
-                    Tab.faviconCache[host] = img
-                    self.favicon = img
-                    self.delegate?.tabDidChangeState(self)
-                }
-            }.resume()
+        // Private browsing must not fetch icons: the request would leave WebKit's
+        // non-persistent store and cache a host the user meant to forget.
+        guard !isPrivate, let host = wv.url?.host else { return }
+        if let cached = FaviconLoader.cached(for: host) {
+            favicon = cached
+            delegate?.tabDidChangeState(self)
+            return
+        }
+        FaviconLoader.load(webView: wv, host: host) { [weak self] image in
+            guard let self, let image else { return }
+            self.favicon = image
+            self.delegate?.tabDidChangeState(self)
         }
     }
 }
@@ -363,7 +371,7 @@ extension Tab: WKNavigationDelegate {
         // itself is owned by Downloads.shared, the way it is for any closed tab.
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.hasCommittedNavigation else { return }
-            self.delegate?.tabRequestsClose(self)
+            self.delegate?.tabRequestsRetirement(self)
         }
     }
 
@@ -375,8 +383,8 @@ extension Tab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if suppressNextVisitRecord {
             suppressNextVisitRecord = false
-        } else {
-            if let u = webView.url, !isPrivate {
+        } else if !isPrivate {
+            if let u = webView.url {
                 Store.shared.recordVisit(url: u, title: webView.title ?? "")
             }
             fetchFavicon(for: webView)
@@ -408,38 +416,12 @@ extension Tab: WKNavigationDelegate {
             return
         }
         let failing = (ns.userInfo[NSURLErrorFailingURLStringErrorKey] as? String) ?? url?.absoluteString ?? ""
-        let host = Self.escaped(URL(string: failing)?.host ?? failing)
-        let reason = Self.escaped(ns.localizedDescription)
-        let html = """
-        <!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width">
-        <style>
-        :root{color-scheme:light dark}
-        body{font:15px/1.55 -apple-system,system-ui;display:grid;place-items:center;height:100vh;margin:0;
-        color:#111;background:#fff}
-        @media(prefers-color-scheme:dark){body{color:#eee;background:#1c1c1e}}
-        .c{max-width:30rem;padding:2rem;text-align:center}
-        h1{font-size:1.25rem;font-weight:600;margin:0 0 .5rem}
-        p{opacity:.65;margin:0 0 1.5rem}
-        button{font:inherit;padding:.5rem 1.1rem;border-radius:7px;border:0;background:#0a84ff;color:#fff;cursor:pointer}
-        code{opacity:.5;font-size:.8rem}
-        </style>
-        <div class=c><h1>Can\u{2019}t open \(host)</h1>
-        <p>\(reason)</p>
-        <button onclick="location.reload()">Try again</button>
-        <p><code>\(ns.domain) \(ns.code)</code></p></div>
-        """
         suppressNextVisitRecord = true
-        webView.loadHTMLString(html, baseURL: URL(string: failing))
-    }
-
-    /// The error page is built from strings, so escape the two that come from
-    /// outside (the host and the system error text) before interpolating them.
-    private static func escaped(_ s: String) -> String {
-        var out = s.replacingOccurrences(of: "&", with: "&amp;")
-        out = out.replacingOccurrences(of: "<", with: "&lt;")
-        out = out.replacingOccurrences(of: ">", with: "&gt;")
-        out = out.replacingOccurrences(of: "\"", with: "&quot;")
-        return out
+        // baseURL is deliberately nil: a synthetic page must not inherit the failing
+        // site's origin, whatever the escaping does.
+        webView.loadHTMLString(ErrorPage.html(failingURL: failing, domain: ns.domain, code: ns.code,
+                                              reason: ns.localizedDescription),
+                               baseURL: nil)
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
@@ -524,6 +506,29 @@ extension Tab: WKUIDelegate {
         a.addButton(withTitle: "Don\u{2019}t Allow")
         a.beginSheetModal(for: webView.window ?? NSApp.keyWindow ?? NSWindow()) { r in
             decisionHandler(r == .alertFirstButtonReturn ? .grant : .deny)
+        }
+    }
+
+    /// `<input type="file">` does nothing at all without this delegate method: the
+    /// page's picker waits on a completion handler WebKit never gets. A sheet on the
+    /// tab's own window is the only presentation that keeps the handler alive.
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        // A hibernated or closed tab has no window, and a detached panel never runs
+        // its completion handler. Answer nil so the page's input resolves.
+        guard let host = webView.window else {
+            completionHandler(nil)
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.canCreateDirectories = false
+        panel.resolvesAliases = true
+        panel.prompt = "Choose"
+        panel.beginSheetModal(for: host) { response in
+            completionHandler(response == .OK && !panel.urls.isEmpty ? panel.urls : nil)
         }
     }
 

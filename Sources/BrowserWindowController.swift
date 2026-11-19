@@ -6,8 +6,8 @@ class FlippedView: NSView {
 }
 
 /// One view holds the toolbar, tab strip and find row. Windowed, it overlays the
-/// transparent titlebar inside `root`. In native full screen the same view becomes
-/// the view of a titlebar accessory, so AppKit moves it with the menu bar.
+/// transparent titlebar inside `root`. In native full screen it fills AppKit's
+/// titlebar window, covering the native strip so it sits flush under the menu bar.
 final class BrowserChromeView: NSView {
     override var isFlipped: Bool { true }
 }
@@ -32,14 +32,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
     let chromeHost = BrowserChromeView()
 
     // MARK: Full-screen state
-    /// Non-nil exactly while the window is in native full screen. Then `chromeHost` is
-    /// the accessory's view and lives in AppKit's titlebar window, not in `root`.
+    /// Non-nil exactly while the window is in native full screen. Then an empty
+    /// accessory sizes AppKit's titlebar window and `chromeHost` fills that window,
+    /// not `root`, so it moves with the menu bar.
     var fullScreenAccessory: NSTitlebarAccessoryViewController?
-    var isEditingURL = false
+    /// Empty spacer that sizes AppKit's full-screen titlebar window to the chrome.
+    var fullScreenSpacer: NSView?
+    /// Native titlebar height AppKit adds above the accessory in full screen.
+    var fullScreenTitlebarStrip: CGFloat = 0
 
-    // Fullscreen custom traffic lights
-    var fullscreenTrafficLights: [NSButton] = []
-    var nativeTrafficLightStates: [(type: NSWindow.ButtonType, wasHidden: Bool)] = []
+    /// Our own window buttons, drawn in full screen while the native ones hide.
+    let fullScreenTrafficLights = FullScreenTrafficLights()
+    var nativeTrafficLightStates: [(type: NSWindow.ButtonType, wasHidden: Bool, label: String?, help: String?)] = []
 
     var backButton: ToolbarButton!
     var forwardButton: ToolbarButton!
@@ -192,6 +196,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
         [backButton, forwardButton, urlBar, reloadButton, bookmarkButton,
          shieldButton, statusPill, downloadIndicator, plusButton].forEach { toolbarRow.addSubview($0!) }
 
+        fullScreenTrafficLights.isHidden = true
+        fullScreenTrafficLights.onClose = { [weak self] in self?.window?.performClose(nil) }
+        fullScreenTrafficLights.onZoom = { [weak self] in self?.window?.toggleFullScreen(nil) }
+        toolbarRow.addSubview(fullScreenTrafficLights)
+
         findField.placeholderString = "Find on page"
         findField.font = .systemFont(ofSize: 12)
         findField.bezelStyle = .roundedBezel
@@ -225,140 +234,86 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSPop
               root.bounds.width > 0,
               backButton != nil, forwardButton != nil, reloadButton != nil,
               bookmarkButton != nil, shieldButton != nil else { return }
-        
+
         let b = root.bounds
         let inTitlebar = fullScreenAccessory != nil
         let toolbarWidth: CGFloat = inTitlebar
             ? (chromeHost.bounds.width > 0 ? chromeHost.bounds.width : b.width)
             : b.width
-        let pillVisible = Settings.shared.showMemoryPill(jsonValue: Config.shared.showMemoryReadout)
+        let pillVisible = Config.shared.showMemoryReadout
         let pillWidth: CGFloat = pillVisible ? max(64, min(190, statusPill.fittingWidth)) : 0
+        let downloadVisible = !downloadIndicator.isHidden
 
         let key = ChromeLayoutKey(width: b.width, height: b.height, inTitlebar: inTitlebar,
-                                  findVisible: findVisible, downloadHidden: downloadIndicator.isHidden,
+                                  findVisible: findVisible, downloadHidden: !downloadVisible,
                                   pillHidden: !pillVisible, pillWidth: pillWidth)
         guard key != lastChromeLayoutKey else { return }
         lastChromeLayoutKey = key
 
-        let toolRow = toolbarRowHeight
-        let tabRow = tabRowHeight
-        let visibleChromeHeight = chromeHeight + findRowHeight
-        let tabsWidth: CGFloat = toolbarWidth
+        // All of the geometry lives in ChromeLayout; this method only applies it.
+        var input = ChromeLayout.Input()
+        input.bounds = b
+        input.toolbarWidth = toolbarWidth
+        input.inTitlebar = inTitlebar
+        input.toolbarRowHeight = toolbarRowHeight
+        input.tabRowHeight = tabRowHeight
+        input.findVisible = findVisible
+        input.downloadVisible = downloadVisible
+        input.pillVisible = pillVisible
+        input.pillWidth = pillWidth
+        input.contentLeft = chromeContentLeft(in: win, inTitlebar: inTitlebar)
+        let frames = ChromeLayout.frames(input)
 
         if inTitlebar {
-            resizeFullScreenAccessory(to: visibleChromeHeight)
+            resizeFullScreenAccessory(to: frames.visibleChromeHeight)
         } else {
             chromeHost.isHidden = false
-            chromeHost.frame = NSRect(x: b.minX, y: b.minY,
-                                      width: b.width, height: visibleChromeHeight)
+            chromeHost.frame = frames.chromeHost
         }
 
-        toolbarRow.frame = NSRect(x: 0, y: 0, width: toolbarWidth, height: toolRow)
-        tabScrollView.frame = NSRect(x: 0, y: toolRow, width: tabsWidth, height: tabRow)
-        progressBar.frame = NSRect(x: 0, y: chromeHeight - 3, width: tabsWidth, height: 3)
-        findRow.frame = NSRect(x: 0, y: chromeHeight, width: tabsWidth, height: findRowHeight)
+        toolbarRow.frame = frames.toolbarRow
+        tabScrollView.frame = frames.tabScrollView
+        progressBar.frame = frames.progressBar
+        findRow.frame = frames.findRow
         findRow.isHidden = !findVisible
+        chromeBackground.frame = frames.chromeBackground
+        hairline.frame = frames.hairline
 
-        chromeBackground.frame = NSRect(x: 0, y: 0, width: tabsWidth, height: visibleChromeHeight)
-        hairline.frame = NSRect(x: 0, y: visibleChromeHeight - 1, width: tabsWidth, height: 1)
-
-        if inTitlebar {
-            webContainer.frame = b
-        } else {
-            webContainer.frame = NSRect(x: b.minX, y: b.minY + visibleChromeHeight,
-                                        width: b.width,
-                                        height: max(0, b.height - visibleChromeHeight))
-        }
+        webContainer.frame = frames.webContainer
         startView.frame = webContainer.bounds
         activeTab?.webView?.frame = webContainer.bounds
 
-        let bw: CGFloat = 30, bh: CGFloat = 28
-        let y = (toolRow - bh) / 2
-        
-        // In fullscreen, the native traffic lights are hidden and replaced by our custom ones in toolbarRow
-        let leftStart: CGFloat
-        if inTitlebar {
-            leftStart = fullscreenTrafficLights.map(\.frame.maxX).max().map { $0 + 10 } ?? 78
-        } else {
-            let lightsRight = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
-                .compactMap { win.standardWindowButton($0) }
-                .map { root.convert($0.bounds, from: $0).maxX }
-                .max() ?? 70
-            leftStart = lightsRight + 10
-        }
-        
-        backButton.frame = NSRect(x: leftStart, y: y, width: bw, height: bh)
-        forwardButton.frame = NSRect(x: leftStart + bw + 2, y: y, width: bw, height: bh)
+        backButton.frame = frames.back
+        forwardButton.frame = frames.forward
+        reloadButton.frame = frames.reload
+        urlBar.frame = frames.urlBar
+        plusButton.frame = frames.plus
+        downloadIndicator.frame = frames.download
+        shieldButton.frame = frames.shield
+        bookmarkButton.frame = frames.bookmark
+        statusPill.isHidden = !pillVisible
+        statusPill.frame = frames.pill
 
-        let clusterLeft = layoutRightCluster(y: y, toolbarWidth: toolbarWidth,
-                                              pillVisible: pillVisible, pillWidth: pillWidth)
-        layoutAddressBar(clusterLeft: clusterLeft, navRight: forwardButton.frame.maxX,
-                         y: y, toolbarWidth: toolbarWidth)
+        findField.frame = frames.findField
+        findPrevButton.frame = frames.findPrevious
+        findNextButton.frame = frames.findNext
+        findCount.frame = frames.findCount
+        findDoneButton.frame = frames.findDone
 
-        if findVisible {
-            findField.frame = NSRect(x: 14, y: 5, width: 250, height: 24)
-            findPrevButton.frame = NSRect(x: 272, y: 5, width: 26, height: 24)
-            findNextButton.frame = NSRect(x: 300, y: 5, width: 26, height: 24)
-            findCount.frame = NSRect(x: 334, y: 9, width: 200, height: 16)
-            findDoneButton.frame = NSRect(x: tabsWidth - 78, y: 5, width: 64, height: 24)
-        }
+        fullScreenTrafficLights.frame = NSRect(x: 9, y: 0,
+                                              width: FullScreenTrafficLights.preferredWidth,
+                                              height: toolbarRowHeight)
     }
 
-    /// Slots plus, ring, shield, star and readout right to left; returns the
-    /// cluster's left edge, which the address bar measures its gap from.
-    private func layoutRightCluster(y: CGFloat, toolbarWidth: CGFloat,
-                                      pillVisible: Bool, pillWidth: CGFloat) -> CGFloat {
-        let bw: CGFloat = 30, bh: CGFloat = 28
-        var right = toolbarWidth - 12
-        plusButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
-        right -= bw + 2
-
-        // The download ring takes the same slot as every other toolbar button, so its
-        // padding matches the controls either side of it. The cluster closes up while
-        // it is hidden, so an idle window shows no empty slot.
-        if !downloadIndicator.isHidden {
-            downloadIndicator.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
-            right -= bw + 2
-        }
-
-        shieldButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
-        right -= bw + 2
-        bookmarkButton.frame = NSRect(x: right - bw, y: y, width: bw, height: bh)
-        right -= bw + 2
-
-        // The readout sits at the head of the right-hand cluster, left of the star.
-        if pillVisible {
-            statusPill.isHidden = false
-            statusPill.frame = NSRect(x: right - pillWidth, y: 0,
-                                      width: pillWidth, height: toolbarRowHeight)
-            right -= pillWidth + 4
-        } else {
-            statusPill.isHidden = true
-        }
-
-        // Leftmost item of the cluster: the readout when it is shown, else the star.
-        return statusPill.isHidden ? bookmarkButton.frame.minX : statusPill.frame.minX
-    }
-
-    /// Reload glued to the bar, with an even gap to the nav buttons on one side
-    /// and the page controls on the other, the way Safari spaces the pair.
-    private func layoutAddressBar(clusterLeft: CGFloat, navRight: CGFloat,
-                                    y: CGFloat, toolbarWidth: CGFloat) {
-        let bw: CGFloat = 30, bh: CGFloat = 28
-        let width = toolbarWidth
-        let reloadGap: CGFloat = 8
-        let minBarWidth: CGFloat = 220
-        let available = clusterLeft - navRight
-        let slack = available - bw - reloadGap - minBarWidth
-        let sideGap = max(14, min(width * 0.14, slack / 2))
-
-        let reloadX = clusterLeft - sideGap - bw
-        reloadButton.frame = NSRect(x: reloadX, y: y, width: bw, height: bh)
-
-        let urlX = navRight + sideGap
-        let fieldH: CGFloat = 28
-        urlBar.frame = NSRect(x: urlX, y: (toolbarRowHeight - fieldH) / 2,
-                              width: max(90, reloadX - reloadGap - urlX), height: fieldH)
+    /// Left edge of the navigation buttons. Windowed, the native buttons are measured
+    /// from their real frames; in full screen our own lights define the space.
+    private func chromeContentLeft(in win: NSWindow, inTitlebar: Bool) -> CGFloat {
+        if inTitlebar { return 9 + FullScreenTrafficLights.preferredWidth + 10 }
+        let lightsRight = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+            .compactMap { win.standardWindowButton($0) }
+            .map { root.convert($0.bounds, from: $0).maxX }
+            .max() ?? 70
+        return lightsRight + 10
     }
 
     func windowDidResize(_ notification: Notification) {

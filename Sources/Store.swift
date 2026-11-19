@@ -35,9 +35,13 @@ final class Store {
         history = Store.readEntries(historyURL)
         bookmarks = Store.readEntries(bookmarksURL)
         reindex()
-        saveTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             self?.flush()
         }
+        // A debounce, not a deadline: without a tolerance this is a hard 20-second
+        // wakeup that the system cannot coalesce with anything else.
+        timer.tolerance = 5
+        saveTimer = timer
     }
 
     private func reindex() {

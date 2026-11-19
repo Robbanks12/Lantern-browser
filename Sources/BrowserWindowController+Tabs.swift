@@ -54,7 +54,12 @@ extension BrowserWindowController {
         tab.hibernate()
         tabs.remove(at: index)
         if tabs.isEmpty {
-            saveSessionNow()
+            // Keep what this window held as the restore point. Saving the now-empty
+            // list here made closing the last tab silently destroy the session.
+            if !isPrivateWindow, tab.url != nil, !tab.isDownloadOnlyTab {
+                Store.shared.saveSession([tab.snapshot()], activeIndex: 0)
+                Store.shared.flush()
+            }
             window?.close()
             return
         }
@@ -104,13 +109,7 @@ extension BrowserWindowController {
     }
 
     func focusURLField() {
-        setURLEditing(true)
-        if !focus(urlField) { setURLEditing(false) }
-    }
-
-    func setURLEditing(_ editing: Bool) {
-        isEditingURL = editing
-        updateChromePin()
+        focus(urlField)
     }
 
     @discardableResult
@@ -142,9 +141,13 @@ extension BrowserWindowController {
     func startHibernationTimer() {
         hibernationTimer?.invalidate()
         guard Config.shared.hibernateAfterMinutes > 0 else { return }
-        hibernationTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             self?.hibernateIdleTabs()
         }
+        // Half a minute of idle bookkeeping does not need to fire on the dot, and a
+        // tolerance lets the system coalesce it with other wakeups.
+        timer.tolerance = 5
+        hibernationTimer = timer
     }
 
     private func hibernateIdleTabs() {
@@ -161,11 +164,24 @@ extension BrowserWindowController {
 
     @objc func hibernateBackgroundTabsNow() {
         var slept = 0
+        var downloading = 0
         for (i, tab) in tabs.enumerated() where i != activeIndex {
-            if !tab.isHibernated { tab.hibernate(); slept += 1 }
+            guard !tab.isHibernated else { continue }
+            // A tab carrying a transfer keeps its web view: sleeping it would cancel
+            // a download the user is waiting on.
+            if tab.isHostingActiveTransfer {
+                downloading += 1
+                continue
+            }
+            tab.hibernate()
+            slept += 1
         }
         refreshChrome()
-        showStatus(slept == 0 ? "Nothing to sleep" : "Slept \(slept) tab\(slept == 1 ? "" : "s")")
+        if downloading > 0 {
+            showStatus("Left \(downloading) tab\(downloading == 1 ? "" : "s") downloading")
+        } else {
+            showStatus(slept == 0 ? "Nothing to sleep" : "Slept \(slept) tab\(slept == 1 ? "" : "s")")
+        }
     }
 
     func installMemoryPressureHandling() {

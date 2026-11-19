@@ -2,7 +2,26 @@ import AppKit
 import WebKit
 
 extension BrowserWindowController {
-    @objc func downloadsDidChange() { updateDownloadIndicator() }
+    @objc func downloadsDidChange() {
+        updateDownloadIndicator()
+        retireFinishedTransferTabs()
+    }
+
+    /// Blank tabs that existed only to host a download: once the transfer ends they
+    /// can go. `retireIfBlankOpenerTarget` would have closed them immediately, but
+    /// closing the tab destroys the web view carrying the bytes.
+    func retireFinishedTransferTabs() {
+        let finished = tabs.filter {
+            guard $0.awaitsTransferBeforeRetirement, !$0.isHostingActiveTransfer else { return false }
+            return Downloads.shared.hasEndedTransfer(for: $0.webView)
+        }
+        for tab in finished {
+            tab.awaitsTransferBeforeRetirement = false
+            if let idx = tabs.firstIndex(where: { $0 === tab }) {
+                closeTab(index: idx)
+            }
+        }
+    }
 
     func updateDownloadIndicator() {
         let d = Downloads.shared
@@ -92,27 +111,35 @@ extension BrowserWindowController {
     func startMemoryReadout() {
         memoryTimer?.invalidate()
         memoryTimer = nil
-        guard Settings.shared.showMemoryPill(jsonValue: Config.shared.showMemoryReadout) else {
+        guard Config.shared.showMemoryReadout else {
             statusPill.text = ""
             return
         }
         updateMemoryReadout()
-        memoryTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
             guard let self, let w = self.window,
                   w.isVisible, w.occlusionState.contains(.visible) else { return }
             self.updateMemoryReadout()
         }
+        // Not a deadline: a tolerance this size lets the system coalesce this wakeup
+        // with everything else instead of waking the CPU on its own.
+        timer.tolerance = 2
+        memoryTimer = timer
     }
 
     private func updateMemoryReadout() {
         guard statusResetWork == nil else { return }
-        let s = MemoryMonitor.sharedSample()
-        let sleeping = tabs.filter { $0.isHibernated }.count
-        var text = s.display
-        if sleeping > 0 { text += " \u{00B7} \(sleeping) asleep" }
-        statusPill.text = text
-        statusPill.toolTip = s.detail()
-        layoutChrome()
+        // Sampling walks every process on the machine; only the label is main-thread
+        // work. A status message that appeared while it ran wins over the readout.
+        MemoryMonitor.sampleAsync { [weak self] sample in
+            guard let self, self.statusResetWork == nil else { return }
+            let sleeping = self.tabs.filter { $0.isHibernated }.count
+            var text = sample.display
+            if sleeping > 0 { text += " \u{00B7} \(sleeping) asleep" }
+            self.statusPill.text = text
+            self.statusPill.toolTip = sample.detail()
+            self.layoutChrome()
+        }
     }
 
     func showStatus(_ message: String) {
@@ -137,9 +164,13 @@ extension BrowserWindowController {
     }
 
     func saveSessionNow() {
-        guard !isPrivateWindow else { return }
-        let snapshots = tabs.filter { $0.url != nil }.map { $0.snapshot() }
-        Store.shared.saveSession(snapshots, activeIndex: activeIndex)
+        // An empty tab list is a window on its way out, not a session; writing it
+        // would erase the restore point closeTab just preserved.
+        guard !isPrivateWindow, !tabs.isEmpty else { return }
+        let snapshots = tabs.filter { $0.url != nil && !$0.isDownloadOnlyTab }.map { $0.snapshot() }
+        // snapshots drops tabs without a URL, so the live index can be past its end.
+        let restoreIndex = min(activeIndex, max(0, snapshots.count - 1))
+        Store.shared.saveSession(snapshots, activeIndex: restoreIndex)
         Store.shared.flush()
     }
 }

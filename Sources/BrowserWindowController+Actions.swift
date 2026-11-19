@@ -37,8 +37,12 @@ extension BrowserWindowController {
     }
 
     private func reloadAllForRuleChange() {
-        for (i, tab) in tabs.enumerated() where i != activeIndex { tab.hibernate() }
-        if let tab = activeTab {
+        // A tab carrying a download keeps its current rules until the transfer ends:
+        // recreating the web view below would cancel it.
+        for (i, tab) in tabs.enumerated() where i != activeIndex && !tab.isHostingActiveTransfer {
+            tab.hibernate()
+        }
+        if let tab = activeTab, !tab.isHostingActiveTransfer {
             tab.webView?.removeFromSuperview()
             tab.hibernate()
             attachActiveTab()
