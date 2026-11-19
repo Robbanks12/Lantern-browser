@@ -1,44 +1,42 @@
 #!/usr/bin/env python3
-"""Draw a minimal app icon (a chevron in a rounded square) and pack an .icns."""
-import os, subprocess, sys, tempfile
+"""Rasterize the supplied SVG artwork into the macOS app icon format."""
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 
-OUT = sys.argv[1] if len(sys.argv) > 1 else "AppIcon.icns"
 
-SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3a3f4b"/><stop offset="1" stop-color="#15171c"/>
-    </linearGradient>
-  </defs>
-  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#g)"/>
-  <path d="M512 250 L742 774 L512 646 L282 774 Z" fill="#ffffff" opacity="0.95"/>
-</svg>"""
+def run(command):
+    subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
 
-with tempfile.TemporaryDirectory() as td:
-    svg = os.path.join(td, "icon.svg")
-    open(svg, "w").write(SVG)
-    iconset = os.path.join(td, "AppIcon.iconset")
-    os.makedirs(iconset)
-    # No 1024 tier: it roughly doubles the .icns for a size Finder almost never
-    # shows. Largest shipped pixels are 256@2x (from the 512 source).
-    sizes = [16, 32, 64, 128, 256, 512]
-    for s in sizes:
-        png = os.path.join(iconset, f"icon_{s}x{s}.png")
-        # qlmanage/sips cannot rasterize SVG reliably; use CoreGraphics via a tiny swift-free path.
-        r = subprocess.run(["/usr/bin/qlmanage", "-t", "-s", str(s), "-o", td, svg],
-                           capture_output=True)
-        produced = os.path.join(td, "icon.svg.png")
-        if os.path.exists(produced):
-            subprocess.run(["/usr/bin/sips", "-z", str(s), str(s), produced, "--out", png],
-                           capture_output=True)
-            os.remove(produced)
-        else:
-            sys.exit(0)  # no rasterizer: skip icon silently
-    # standard iconset naming
-    for s in sizes:
-        src = os.path.join(iconset, f"icon_{s}x{s}.png")
-        if s in (32, 64, 256, 512) and os.path.exists(src):
-            half = s // 2
-            dst = os.path.join(iconset, f"icon_{half}x{half}@2x.png")
-            subprocess.run(["/bin/cp", src, dst], capture_output=True)
-    subprocess.run(["/usr/bin/iconutil", "-c", "icns", iconset, "-o", OUT], capture_output=True)
+
+def main():
+    if len(sys.argv) != 3:
+        raise SystemExit("usage: make_icon.py SOURCE.svg DESTINATION.icns")
+
+    source, output = sys.argv[1:]
+    output = os.path.abspath(output)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        run(["/usr/bin/qlmanage", "-t", "-s", "512", "-o", temp_dir, source])
+        rendered = os.path.join(temp_dir, os.path.basename(source) + ".png")
+        if not os.path.isfile(rendered):
+            raise RuntimeError(f"Quick Look did not render {source}")
+
+        iconset = os.path.join(temp_dir, "AppIcon.iconset")
+        os.makedirs(iconset)
+        sizes = (16, 32, 64, 128, 256, 512)
+        for size in sizes:
+            png = os.path.join(iconset, f"icon_{size}x{size}.png")
+            run(["/usr/bin/sips", "-z", str(size), str(size), rendered, "--out", png])
+
+        for size in (32, 64, 256, 512):
+            src = os.path.join(iconset, f"icon_{size}x{size}.png")
+            dst = os.path.join(iconset, f"icon_{size // 2}x{size // 2}@2x.png")
+            shutil.copyfile(src, dst)
+
+        run(["/usr/bin/iconutil", "-c", "icns", iconset, "-o", output])
+
+
+if __name__ == "__main__":
+    main()

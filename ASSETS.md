@@ -3,7 +3,7 @@
 The source code of Lantern is licensed under the MIT License (see `LICENSE`).
 
 However, all visual assets, including but not limited to:
-* The Lantern app icon (`Resources/AppIcon.icns`)
+* The Lantern app icon (`Resources/AppIcon.svg`, packaged as `Resources/AppIcon.icns`)
 * The "Lantern 🏮" logo and branding
 * Any custom illustrations or UI graphics
 

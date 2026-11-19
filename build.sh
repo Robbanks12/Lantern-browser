@@ -80,10 +80,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Generate a simple app icon from an SF Symbol-ish drawing.
-# Sizes stop at 512: the 1024px tier roughly doubles the .icns for a size Finder
-# almost never shows, and make_icon.py skips it (see tools/make_icon.py).
-if [ -x /usr/bin/python3 ]; then python3 tools/make_icon.py "$APP/Contents/Resources/AppIcon.icns" || true; fi
+# Package the supplied artwork as the macOS app icon.
+python3 tools/make_icon.py Resources/AppIcon.svg "$APP/Contents/Resources/AppIcon.icns"
 
 codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP" >/dev/null 2>&1 \
   || echo "   (ad-hoc signing skipped)"
