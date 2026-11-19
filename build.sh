@@ -50,8 +50,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSMicrophoneUsageDescription</key><string>Websites you allow can use the microphone.</string>
   <key>NSLocationWhenInUseUsageDescription</key><string>Websites you allow can use your location.</string>
   <key>NSDownloadsFolderUsageDescription</key><string>Lantern saves the files you download to your Downloads folder.</string>
+  <!-- A browser must reach plain http, so web content is exempt from ATS. The
+       app's own networking is not: only web content gets the exemption, which
+       keeps the favicon URLSession under the normal TLS rules. -->
   <key>NSAppTransportSecurity</key>
-  <dict><key>NSAllowsArbitraryLoads</key><true/></dict>
+  <dict>
+    <key>NSAllowsArbitraryLoadsInWebContent</key><true/>
+    <key>NSAllowsLocalNetworking</key><true/>
+  </dict>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
