@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Resources/AppIcon.svg" width="112" height="112" alt="Lantern" />
+  <img src="Resources/AppIcon-rounded.svg" width="112" height="112" alt="Lantern" />
   <h1>Lantern 🏮</h1>
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" /></a>
