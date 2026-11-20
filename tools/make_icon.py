@@ -18,7 +18,8 @@ def main():
     source, output = sys.argv[1:]
     output = os.path.abspath(output)
     with tempfile.TemporaryDirectory() as temp_dir:
-        run(["/usr/bin/qlmanage", "-t", "-s", "512", "-o", temp_dir, source])
+        # 256px stays sharp through 128pt at 2x; the SVG remains the full-size master.
+        run(["/usr/bin/qlmanage", "-t", "-s", "256", "-o", temp_dir, source])
         rendered = os.path.join(temp_dir, os.path.basename(source) + ".png")
         if not os.path.isfile(rendered):
             raise RuntimeError(f"Quick Look did not render {source}")
@@ -34,11 +35,6 @@ def main():
             src = os.path.join(iconset, f"icon_{size}x{size}.png")
             dst = os.path.join(iconset, f"icon_{size // 2}x{size // 2}@2x.png")
             shutil.copyfile(src, dst)
-
-        # This is the same 512px raster as icon_512x512, so keep it only as
-        # the 256pt Retina representation instead of storing it twice.
-        retina_256 = os.path.join(iconset, "icon_256x256@2x.png")
-        run(["/usr/bin/sips", "-z", "512", "512", rendered, "--out", retina_256])
 
         run(["/usr/bin/iconutil", "-c", "icns", iconset, "-o", output])
 
