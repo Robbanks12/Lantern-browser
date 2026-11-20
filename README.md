@@ -1,11 +1,10 @@
 <div align="center">
+  <img src="Resources/AppIcon.svg" width="112" height="112" alt="Lantern" />
   <h1>Lantern 🏮</h1>
-  
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" /></a>
     <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform: macOS" />
   </p>
-
 </div>
 
 > **Status: work in progress.** Lantern is currently a work in progress and is
