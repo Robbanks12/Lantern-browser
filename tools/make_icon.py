@@ -25,15 +25,20 @@ def main():
 
         iconset = os.path.join(temp_dir, "AppIcon.iconset")
         os.makedirs(iconset)
-        sizes = (16, 32, 64, 128, 256, 512)
+        sizes = (16, 32, 64, 128, 256)
         for size in sizes:
             png = os.path.join(iconset, f"icon_{size}x{size}.png")
             run(["/usr/bin/sips", "-z", str(size), str(size), rendered, "--out", png])
 
-        for size in (32, 64, 256, 512):
+        for size in (32, 64, 256):
             src = os.path.join(iconset, f"icon_{size}x{size}.png")
             dst = os.path.join(iconset, f"icon_{size // 2}x{size // 2}@2x.png")
             shutil.copyfile(src, dst)
+
+        # This is the same 512px raster as icon_512x512, so keep it only as
+        # the 256pt Retina representation instead of storing it twice.
+        retina_256 = os.path.join(iconset, "icon_256x256@2x.png")
+        run(["/usr/bin/sips", "-z", "512", "512", rendered, "--out", retina_256])
 
         run(["/usr/bin/iconutil", "-c", "icns", iconset, "-o", output])
 
